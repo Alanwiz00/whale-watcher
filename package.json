@@ -1,0 +1,44 @@
+{
+  "name": "whale-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WhaleWatcher — World Cup 2026 prediction-market whale & smart-money intelligence platform",
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build": "pnpm -r --filter=./apps/* build",
+    "dev": "pnpm -r --parallel --filter=./apps/* dev",
+    "dev:api": "pnpm --filter @whale/api dev",
+    "dev:collectors": "pnpm --filter @whale/collectors dev",
+    "dev:engine": "pnpm --filter @whale/engine dev",
+    "dev:bot": "pnpm --filter @whale/bot dev",
+    "dev:web": "pnpm --filter @whale/web dev",
+    "db:generate": "pnpm --filter @whale/db generate",
+    "db:migrate": "pnpm --filter @whale/db migrate",
+    "db:push": "pnpm --filter @whale/db push",
+    "db:studio": "pnpm --filter @whale/db studio",
+    "db:seed": "pnpm --filter @whale/db seed",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^8.57.1",
+    "prettier": "^3.4.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

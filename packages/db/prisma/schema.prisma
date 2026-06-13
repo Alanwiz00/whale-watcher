@@ -1,0 +1,309 @@
+// WhaleWatcher data model — PostgreSQL 18 + Prisma.
+//
+// Conventions:
+//  • Prices are implied probabilities in [0,1] (binary outcomes) for
+//    cross-platform comparability. Money fields use Decimal(20,4) USD.
+//  • Every external record is keyed by (platform, externalId) so re-ingesting
+//    the same trade/market is idempotent (upsert).
+//  • Time-series tables (Trade, OrderBook, MarketSnapshot) are indexed on
+//    (entity, timestamp) for range scans, plus a standalone timestamp index for
+//    global recency feeds. See DEPLOYMENT.md for the optional Timescale path.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Platform {
+  polymarket
+  kalshi
+  manifold
+  predictit
+  betfair
+  pinnacle
+  stake
+  draftkings
+  fanduel
+}
+
+enum EventType {
+  tournament_winner
+  reach_stage
+  golden_boot
+  group_winner
+  match_result
+  match_total_goals
+  tournament_total_goals
+  top_scorer_team
+  other
+}
+
+enum MarketStatus {
+  open
+  closed
+  resolved
+  unknown
+}
+
+enum TradeSide {
+  buy
+  sell
+}
+
+enum AlertType {
+  whale_trade
+  split_accumulation
+  smart_money
+  steam_move
+  market_impact
+  arbitrage
+  volume_anomaly
+  wallet_anomaly
+}
+
+enum AlertSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum WhaleTier {
+  elite
+  strong
+  notable
+  normal
+}
+
+model Market {
+  id           String       @id @default(cuid())
+  platform     Platform
+  externalId   String
+  title        String
+  eventType    EventType    @default(other)
+  team         String?
+  canonicalKey String? // links the "same" market across platforms for arb
+  startTime    DateTime?
+  closeTime    DateTime?
+  status       MarketStatus @default(unknown)
+  volumeUsd    Decimal?     @db.Decimal(20, 4)
+  liquidityUsd Decimal?     @db.Decimal(20, 4)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  trades       Trade[]
+  orderBooks   OrderBook[]
+  snapshots    MarketSnapshot[]
+  alerts       Alert[]
+  steamMoves   SteamMove[]
+  whaleSignals WhaleSignal[]
+
+  @@unique([platform, externalId])
+  @@index([canonicalKey])
+  @@index([eventType])
+  @@index([status])
+  @@index([team])
+  @@index([platform, status])
+  @@map("markets")
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  platform  Platform
+  address   String // wallet address (Polymarket) / user id (Kalshi/Manifold)
+  label     String? // optional human label / known-entity tag
+  firstSeen DateTime @default(now())
+  lastSeen  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  trades       Trade[]
+  stats        WalletStats?
+  whaleSignals WhaleSignal[]
+
+  @@unique([platform, address])
+  @@index([platform])
+  @@index([lastSeen])
+  @@map("wallets")
+}
+
+model WalletStats {
+  id                String   @id @default(cuid())
+  walletId          String   @unique
+  wallet            Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  trades            Int      @default(0)
+  resolvedPositions Int      @default(0)
+  totalStakedUsd    Decimal  @default(0) @db.Decimal(20, 4)
+  realizedPnlUsd    Decimal  @default(0) @db.Decimal(20, 4)
+  roi               Float    @default(0)
+  winRate           Float    @default(0)
+  avgPositionUsd    Decimal  @default(0) @db.Decimal(20, 4)
+  expectedValue     Float    @default(0)
+  sharpe            Float    @default(0)
+  whaleScoreAvg     Float?
+  rankRoi           Int?
+  rankVolume        Int?
+  updatedAt         DateTime @updatedAt
+
+  @@index([roi])
+  @@index([totalStakedUsd])
+  @@index([sharpe])
+  @@map("wallet_stats")
+}
+
+model Trade {
+  id            String    @id @default(cuid())
+  platform      Platform
+  externalId    String
+  marketId      String
+  market        Market    @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcomeName   String?
+  walletId      String?
+  wallet        Wallet?   @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  walletAddress String? // denormalized raw id for fast filtering even if wallet row absent
+  side          TradeSide
+  price         Decimal   @db.Decimal(10, 6)
+  size          Decimal   @db.Decimal(24, 6)
+  sizeUsd       Decimal   @db.Decimal(20, 4)
+  timestamp     DateTime
+  raw           Json?
+  createdAt     DateTime  @default(now())
+
+  whaleSignal WhaleSignal?
+
+  @@unique([platform, externalId])
+  @@index([marketId, timestamp])
+  @@index([walletId, timestamp])
+  @@index([walletAddress])
+  @@index([sizeUsd])
+  @@index([timestamp])
+  @@index([platform, timestamp])
+  @@map("trades")
+}
+
+model OrderBook {
+  id           String    @id @default(cuid())
+  platform     Platform
+  marketId     String
+  market       Market    @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcomeName  String?
+  bestBid      Decimal?  @db.Decimal(10, 6)
+  bestAsk      Decimal?  @db.Decimal(10, 6)
+  spread       Decimal?  @db.Decimal(10, 6)
+  bidDepthUsd  Decimal?  @db.Decimal(20, 4)
+  askDepthUsd  Decimal?  @db.Decimal(20, 4)
+  liquidityUsd Decimal?  @db.Decimal(20, 4)
+  timestamp    DateTime
+  createdAt    DateTime  @default(now())
+
+  @@index([marketId, timestamp])
+  @@index([timestamp])
+  @@map("order_books")
+}
+
+model MarketSnapshot {
+  id           String   @id @default(cuid())
+  marketId     String
+  market       Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcomeName  String?
+  impliedProb  Decimal? @db.Decimal(10, 6)
+  volumeUsd    Decimal? @db.Decimal(20, 4)
+  liquidityUsd Decimal? @db.Decimal(20, 4)
+  timestamp    DateTime
+
+  @@index([marketId, timestamp])
+  @@index([timestamp])
+  @@map("market_snapshots")
+}
+
+model WhaleSignal {
+  id               String    @id @default(cuid())
+  tradeId          String?   @unique
+  trade            Trade?    @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+  platform         Platform
+  marketId         String
+  market           Market    @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  walletId         String?
+  wallet           Wallet?   @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  sizeUsd          Decimal   @db.Decimal(20, 4)
+  side             TradeSide
+  price            Decimal   @db.Decimal(10, 6)
+  score            Int
+  tier             WhaleTier
+  componentSize    Float     @default(0)
+  componentRoi     Float     @default(0)
+  componentImpact  Float     @default(0)
+  componentTiming  Float     @default(0)
+  marketImpactPct  Float?
+  isSplitAggregate Boolean   @default(false)
+  timestamp        DateTime
+  createdAt        DateTime  @default(now())
+
+  @@index([score])
+  @@index([timestamp])
+  @@index([walletId])
+  @@index([marketId, timestamp])
+  @@index([tier, timestamp])
+  @@map("whale_signals")
+}
+
+model Alert {
+  id          String        @id @default(cuid())
+  type        AlertType
+  severity    AlertSeverity
+  platform    Platform
+  marketId    String?
+  market      Market?       @relation(fields: [marketId], references: [id], onDelete: SetNull)
+  walletId    String?
+  title       String
+  body        String
+  data        Json
+  dedupeKey   String        @unique
+  delivered   Boolean       @default(false)
+  deliveredAt DateTime?
+  createdAt   DateTime      @default(now())
+
+  @@index([type, createdAt])
+  @@index([severity, createdAt])
+  @@index([createdAt])
+  @@index([delivered])
+  @@map("alerts")
+}
+
+model ArbitrageEvent {
+  id           String    @id @default(cuid())
+  canonicalKey String
+  outcomeName  String
+  edge         Float
+  bookSum      Float
+  legs         Json // [{ platform, marketExternalId, impliedProb, bestPrice }]
+  detectedAt   DateTime  @default(now())
+  resolvedAt   DateTime?
+
+  @@index([canonicalKey])
+  @@index([detectedAt])
+  @@index([edge])
+  @@map("arbitrage_events")
+}
+
+model SteamMove {
+  id             String   @id @default(cuid())
+  platform       Platform
+  marketId       String
+  market         Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcomeName    String?
+  fromProb       Decimal  @db.Decimal(10, 6)
+  toProb         Decimal  @db.Decimal(10, 6)
+  movePct        Float
+  windowMs       Int
+  noVisibleWhale Boolean  @default(true)
+  detectedAt     DateTime @default(now())
+
+  @@index([marketId, detectedAt])
+  @@index([detectedAt])
+  @@map("steam_moves")
+}

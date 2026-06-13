@@ -1,0 +1,156 @@
+name: whalewatcher
+
+x-node-build: &node-build
+  context: .
+  dockerfile: docker/node.Dockerfile
+
+x-service-env: &service-env
+  NODE_ENV: production
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  DATABASE_URL: postgresql://${POSTGRES_USER:-whale}:${POSTGRES_PASSWORD:-change_me_in_prod}@postgres:5432/${POSTGRES_DB:-whalewatcher}?schema=public&connection_limit=20
+  REDIS_URL: redis://redis:6379
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-whale}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_prod}
+      POSTGRES_DB: ${POSTGRES_DB:-whalewatcher}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whale} -d ${POSTGRES_DB:-whalewatcher}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    build: { <<: *node-build, args: { APP: db } }
+    image: whalewatcher/db
+    command: ["sh", "-c", "pnpm --filter @whale/db migrate:deploy"]
+    env_file: .env
+    environment: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  collectors:
+    build: { <<: *node-build, args: { APP: collectors } }
+    image: whalewatcher/collectors
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *service-env
+      METRICS_PORT: "9100"
+    depends_on:
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "9100:9100"
+
+  engine:
+    build: { <<: *node-build, args: { APP: engine } }
+    image: whalewatcher/engine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *service-env
+      METRICS_PORT: "9100"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "9101:9101"
+
+  api:
+    build: { <<: *node-build, args: { APP: api } }
+    image: whalewatcher/api
+    restart: unless-stopped
+    env_file: .env
+    environment: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: { <<: *node-build, args: { APP: bot } }
+    image: whalewatcher/bot
+    restart: unless-stopped
+    env_file: .env
+    environment: *service-env
+    depends_on:
+      redis: { condition: service_healthy }
+      api: { condition: service_started }
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    image: whalewatcher/web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:4000/ws}
+    depends_on:
+      api: { condition: service_started }
+    ports:
+      - "3000:3000"
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change_me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  redisdata:
+  grafanadata:

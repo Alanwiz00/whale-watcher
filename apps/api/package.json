@@ -1,0 +1,28 @@
+{
+  "name": "@whale/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/rate-limit": "^10.2.1",
+    "@fastify/websocket": "^11.0.1",
+    "@prisma/client": "^6.1.0",
+    "@whale/core": "workspace:*",
+    "@whale/db": "workspace:*",
+    "fastify": "^5.2.0",
+    "ioredis": "^5.4.1",
+    "prom-client": "^15.1.3"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

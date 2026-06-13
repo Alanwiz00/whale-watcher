@@ -1,0 +1,40 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# env
+.env
+.env.*
+!.env.example
+
+# prisma
+packages/db/prisma/migrations/dev.db*
+
+# logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# docker / data volumes
+.docker-data/
+pgdata/
+redisdata/
+grafanadata/
+
+# coverage
+coverage/
+.nyc_output/

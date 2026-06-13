@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@whale/core": ["packages/core/src/index.ts"],
+      "@whale/core/*": ["packages/core/src/*"],
+      "@whale/db": ["packages/db/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/src/**/*.ts", "apps/**/src/**/*.ts"]
+}
