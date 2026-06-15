@@ -8,5 +8,6 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   noExternal: [/^@whale\//],
-  external: ['@prisma/client', '.prisma', 'ioredis', 'telegraf'],
+  // pino can't be bundled into ESM (dynamic require), so it stays external.
+  external: ['pino', 'pino-pretty', '@prisma/client', '.prisma', 'ioredis', 'telegraf'],
 });

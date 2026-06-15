@@ -8,6 +8,7 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   // Bundle internal workspace packages; keep native/runtime deps external.
+  // pino can't be bundled into ESM (dynamic require), so it stays external.
   noExternal: [/^@whale\//],
-  external: ['ioredis', 'bullmq', 'prom-client'],
+  external: ['pino', 'pino-pretty', 'ioredis', 'bullmq', 'prom-client'],
 });
