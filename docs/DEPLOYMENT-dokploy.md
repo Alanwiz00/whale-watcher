@@ -57,15 +57,14 @@ Both stay on the private Docker network — no domains, no published ports.
    [`.env.prod.example`](../.env.prod.example). Set `DATABASE_URL` / `REDIS_URL`
    to the Dokploy internal strings from step 1. Generate `API_KEYS` with
    `openssl rand -hex 32`. Set `API_CORS_ORIGIN=https://app.your-domain.com`.
-4. **Run command** (runs migrations, then starts the API):
-   ```sh
-   sh -c "pnpm --filter @whale/db migrate:deploy && node apps/api/dist/index.js"
-   ```
-   `prisma` ships in the runtime image, so migrations run from this container —
-   no separate migrate app needed.
-5. **Domain:** `api.your-domain.com` → container port **4000**, enable HTTPS.
-6. **Health check path:** `/health` (open, no key required).
-7. Deploy. Watch logs for `migrate deploy` then `API listening`.
+   **Include `RUN_MIGRATIONS=true`** — the container's entrypoint then applies
+   pending Prisma migrations on startup before booting the API (no custom run
+   command needed). `prisma` ships in the runtime image, and a migration failure
+   aborts startup so you never boot against a bad schema. Set this **only on api**
+   so migrations run from one service.
+4. **Domain:** `api.your-domain.com` → container port **4000**, enable HTTPS.
+5. **Health check path:** `/health` (open, no key required).
+6. Deploy. Watch logs for `→ prisma migrate deploy` then `API listening`.
 
 ## 3. Create the worker apps: `engine`, `collectors`, `bot`
 
@@ -75,6 +74,7 @@ For each: **Create → Application** → same repo → **Dockerfile**
 
 - **Environment:** COMMON block + the app's extra block from `.env.prod.example`
   (bot needs the `TELEGRAM_*` vars; engine/collectors take `METRICS_PORT=9100`).
+  **Do not set `RUN_MIGRATIONS`** here — only api migrates.
 - **No domain, no port** — these don't accept ingress.
 - Leave the default start command (the image's `CMD` runs the right service).
 - Deploy them **one at a time** (wait for each to go green before the next).
@@ -110,11 +110,24 @@ markets". Unauthenticated calls to `/api/*` now return `401` (key gate is on).
 
 ## Re-running migrations later
 
-Migrations run automatically on every `api` deploy (idempotent). To run manually,
-open the `api` container's terminal in Dokploy:
+With `RUN_MIGRATIONS=true` on the api app, migrations run automatically on every
+api start/redeploy (idempotent — only pending migrations are applied). To run
+them manually, open the `api` container's terminal in Dokploy:
 ```sh
 pnpm --filter @whale/db migrate:deploy
 ```
+
+## Troubleshooting builds
+
+- **`"/apps": not found` (or `/packages`, `/.npmrc`) during COPY** — the build
+  **context** is wrong. Set each app's **Docker Context Path / Build Path** to
+  **`.`** (repo root) and the **Dockerfile path** to `docker/node.Dockerfile`
+  (web: `docker/web.Dockerfile`). The Dockerfiles COPY from the monorepo root, so
+  the context must be the root, not the `docker/` folder.
+- **`target stage "production" could not be found`** — older builds; the runtime
+  stage is now named `production` in both Dockerfiles, so `--target production`
+  resolves. If a Dokploy **Build Stage** field is set, use `production` or leave
+  it blank. Make sure the fix is committed & pushed (Dokploy builds from Git).
 
 ## Troubleshooting OOM / crashes
 

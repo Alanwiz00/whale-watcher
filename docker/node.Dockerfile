@@ -31,5 +31,8 @@ ENV NODE_ENV=production
 ENV APP=${APP}
 COPY --from=build /app /app
 EXPOSE 4000 9100 9101
-# APP is fixed at build time; resolve the entrypoint via shell.
-CMD ["sh", "-c", "node apps/$APP/dist/index.js"]
+# APP is fixed at build time. When RUN_MIGRATIONS=true (set it on the api service
+# only), apply pending Prisma migrations before starting — a migration failure
+# aborts startup so we never boot against a bad schema. `exec` makes the service
+# PID 1 for correct signal handling.
+CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"true\" ]; then echo '→ prisma migrate deploy'; pnpm --filter @whale/db migrate:deploy; fi && exec node apps/$APP/dist/index.js"]
