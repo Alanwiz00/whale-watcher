@@ -22,7 +22,9 @@ COPY apps ./apps
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm --filter @whale/web build
 
-FROM node:22-slim AS run
+# Named `production` so `--target production` (Dokploy) resolves; also the last
+# stage, so plain builds (docker-compose, CI) without a target still build it.
+FROM node:22-slim AS production
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 # Next standalone preserves the monorepo path layout.

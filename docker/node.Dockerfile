@@ -22,7 +22,10 @@ RUN pnpm --filter @whale/${APP} build
 RUN pnpm install --prod --no-frozen-lockfile
 
 # ── runtime ──────────────────────────────────────────────────────────────────
-FROM base AS run
+# Stage is named `production` so builders that pass `--target production`
+# (e.g. Dokploy) resolve it. It's also the last stage, so plain builds
+# (docker-compose, CI) that don't pass a target still build it.
+FROM base AS production
 ARG APP
 ENV NODE_ENV=production
 ENV APP=${APP}
