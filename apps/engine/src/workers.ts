@@ -9,6 +9,7 @@ import {
   type WalletStatsJob,
 } from '@whale/core';
 import { scanArbitrage } from './arbitrage.js';
+import { withDbRetry } from './db-retry.js';
 import { detectSplitAccumulation } from './detection/split.js';
 import { detectSteam } from './detection/steam.js';
 import { detectWhale } from './detection/whale.js';
@@ -28,10 +29,10 @@ export function startWorkers(): Worker[] {
     async (job) => {
       const end = jobLatency.startTimer({ queue: 'markets' });
       const m = normalizeMarket(job.data.market);
-      if (m) await upsertMarket(m);
+      if (m) await withDbRetry(() => upsertMarket(m));
       end();
     },
-    { connection, concurrency: 8 },
+    { connection, concurrency: 4 },
   );
 
   const tradesWorker = new Worker<TradeJob>(
@@ -40,17 +41,23 @@ export function startWorkers(): Worker[] {
       const end = jobLatency.startTimer({ queue: 'trades' });
       const trade = normalizeTrade(job.data.trade);
       if (!trade) return end();
-      const persisted = await persistTrade(trade);
-      tradesProcessed.inc({ platform: trade.platform });
-      if (persisted.isNew) {
-        // Detection runs only on genuinely new trades.
-        await detectWhale(trade, persisted);
-        await detectSplitAccumulation(trade, persisted);
-        if (persisted.walletId) await enqueueWalletStats(persisted.walletId, trade.platform);
-      }
+      // Wrap the persist+detect block so a transient DB-connection drop retries
+      // (reconnects) instead of failing the job. The block is idempotent.
+      await withDbRetry(async () => {
+        const persisted = await persistTrade(trade);
+        tradesProcessed.inc({ platform: trade.platform });
+        if (persisted.isNew) {
+          // Detection runs only on genuinely new trades.
+          await detectWhale(trade, persisted);
+          await detectSplitAccumulation(trade, persisted);
+          if (persisted.walletId) await enqueueWalletStats(persisted.walletId, trade.platform);
+        }
+      });
       end();
     },
-    { connection, concurrency: 12 },
+    // Concurrency is sized so the engine's total in-flight DB work stays well
+    // under the Prisma connection pool (see DATABASE_URL connection_limit).
+    { connection, concurrency: 8 },
   );
 
   const orderBooksWorker = new Worker<OrderBookJob>(
@@ -59,41 +66,50 @@ export function startWorkers(): Worker[] {
       const end = jobLatency.startTimer({ queue: 'orderbooks' });
       const book = normalizeOrderBook(job.data.book);
       if (!book) return end();
-      const marketId = await persistOrderBook(book);
-      const mid =
-        book.bestBid != null && book.bestAsk != null
-          ? (book.bestBid + book.bestAsk) / 2
-          : (book.bestAsk ?? book.bestBid);
-      if (mid != null) {
-        await detectSteam(marketId, book.platform, book.outcomeName ?? null, mid, book.timestamp);
-      }
+      await withDbRetry(async () => {
+        const marketId = await persistOrderBook(book);
+        const mid =
+          book.bestBid != null && book.bestAsk != null
+            ? (book.bestBid + book.bestAsk) / 2
+            : (book.bestAsk ?? book.bestBid);
+        if (mid != null) {
+          await detectSteam(
+            marketId,
+            book.platform,
+            book.outcomeName ?? null,
+            mid,
+            book.timestamp,
+            book.liquidityUsd,
+          );
+        }
+      });
       end();
     },
-    { connection, concurrency: 8 },
+    { connection, concurrency: 4 },
   );
 
   const walletStatsWorker = new Worker<WalletStatsJob>(
     QUEUES.walletStats,
     async (job) => {
       const end = jobLatency.startTimer({ queue: 'wallet-stats' });
-      await computeWalletStats(job.data.wallet);
+      await withDbRetry(() => computeWalletStats(job.data.wallet));
       end();
     },
-    { connection, concurrency: 4 },
+    { connection, concurrency: 2 },
   );
 
   const scanWorker = new Worker(
-    'q:engine:scan',
+    'q-engine-scan',
     async (job) => {
       switch (job.name) {
         case 'arbitrage':
-          return void (await scanArbitrage());
+          return void (await withDbRetry(() => scanArbitrage()));
         case 'anomaly':
-          await detectVolumeAnomalies();
-          await detectWalletAnomalies();
+          await withDbRetry(() => detectVolumeAnomalies());
+          await withDbRetry(() => detectWalletAnomalies());
           return;
         case 'ranks':
-          return recomputeRanks();
+          return withDbRetry(() => recomputeRanks());
       }
     },
     { connection, concurrency: 1 },

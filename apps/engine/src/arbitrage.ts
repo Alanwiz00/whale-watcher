@@ -1,4 +1,4 @@
-import { config, logger, quant, type Platform } from '@whale/core';
+import { config, logger, PLAY_MONEY_PLATFORMS, quant, type Platform } from '@whale/core';
 import { prisma } from '@whale/db';
 import { emitAlert } from './alerts.js';
 
@@ -30,9 +30,21 @@ interface OutcomeQuote {
  *   • mispricing — flag outcomes whose cross-venue prob spread is large.
  */
 export async function scanArbitrage(): Promise<number> {
+  const now = new Date();
   const markets = await prisma.market.findMany({
-    where: { canonicalKey: { not: null }, status: 'open' },
-    select: { id: true, platform: true, externalId: true, canonicalKey: true },
+    where: {
+      canonicalKey: { not: null },
+      status: 'open',
+      // Exclude markets that have already closed/resolved (e.g. concluded matches).
+      OR: [{ closeTime: null }, { closeTime: { gt: now } }],
+    },
+    select: {
+      id: true,
+      platform: true,
+      externalId: true,
+      canonicalKey: true,
+      startTime: true,
+    },
   });
 
   // Group markets by canonical key.
@@ -45,18 +57,32 @@ export async function scanArbitrage(): Promise<number> {
 
   let opportunities = 0;
   for (const [canonicalKey, group] of byKey) {
-    const platforms = new Set(group.map((m) => m.platform));
-    if (platforms.size < 2) continue; // need ≥2 venues to compare
+    // Skip catch-all keys that collapse unrelated markets into one bucket.
+    if (canonicalKey.includes(':other')) continue;
+    // Skip matches that have already kicked off — their odds are stale, not arbs.
+    if (canonicalKey.includes(':match:') && group.some((m) => m.startTime && m.startTime < now)) {
+      continue;
+    }
 
-    // outcome → quotes across platforms (latest snapshot per market/outcome).
-    const outcomeQuotes = new Map<string, OutcomeQuote[]>();
-    for (const m of group) {
+    // Only real-money venues are arbitrageable; play money (Manifold) is signal-only.
+    const realGroup = group.filter((m) => !PLAY_MONEY_PLATFORMS.includes(m.platform));
+    const platforms = new Set(realGroup.map((m) => m.platform));
+    if (platforms.size < 2) continue; // need ≥2 DISTINCT real-money venues
+
+    // outcome → best quote PER PLATFORM. Deduping by platform stops the
+    // "manifold vs manifold vs manifold" nonsense where many distinct markets
+    // on one venue shared a canonical key.
+    const outcomeQuotes = new Map<string, Map<Platform, OutcomeQuote>>();
+    for (const m of realGroup) {
       const latest = await latestProbsForMarket(m.id);
       for (const [outcome, prob] of latest) {
         const norm = normalizeOutcome(outcome);
-        const arr = outcomeQuotes.get(norm) ?? [];
-        arr.push({ platform: m.platform, marketExternalId: m.externalId, prob });
-        outcomeQuotes.set(norm, arr);
+        const perPlatform = outcomeQuotes.get(norm) ?? new Map<Platform, OutcomeQuote>();
+        const existing = perPlatform.get(m.platform);
+        if (!existing || prob < existing.prob) {
+          perPlatform.set(m.platform, { platform: m.platform, marketExternalId: m.externalId, prob });
+        }
+        outcomeQuotes.set(norm, perPlatform);
       }
     }
 
@@ -64,15 +90,16 @@ export async function scanArbitrage(): Promise<number> {
     const legs: Array<{ platform: Platform; marketExternalId: string; impliedProb: number; bestPrice: number; outcome: string }> = [];
     const bestProbs: number[] = [];
     let multiVenueOutcomes = 0;
-    for (const [outcome, quotes] of outcomeQuotes) {
-      if (quotes.length < 2) continue;
+    for (const [outcome, perPlatform] of outcomeQuotes) {
+      const quotes = [...perPlatform.values()];
+      if (quotes.length < 2) continue; // ≥2 DISTINCT platforms quoting this outcome
       multiVenueOutcomes++;
       const best = quotes.reduce((a, b) => (b.prob < a.prob ? b : a));
       const fee = FEE_BY_PLATFORM[best.platform] ?? 0.02;
       bestProbs.push(best.prob * (1 + fee));
       legs.push({ ...best, impliedProb: best.prob, bestPrice: best.prob, outcome });
 
-      // Mispricing: large spread on the same outcome across venues.
+      // Mispricing: large spread on the same outcome across distinct venues.
       const spread = Math.max(...quotes.map((q) => q.prob)) - Math.min(...quotes.map((q) => q.prob));
       if (spread >= config.ARB_MIN_EDGE * 2) {
         await recordMispricing(canonicalKey, outcome, quotes, spread);

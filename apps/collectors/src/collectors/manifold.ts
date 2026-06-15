@@ -39,14 +39,21 @@ interface ManifoldBet {
   shares?: number;
   createdTime?: number;
   isRedemption?: boolean;
+  isAnte?: boolean;
+  isLiquidityProvision?: boolean;
 }
 
 const SEARCH_TERMS = ['world cup 2026', 'fifa world cup 2026', '2026 world cup'];
 
 export class ManifoldCollector implements Collector {
   readonly platform = 'manifold' as const;
-  // NB: Manifold is play-money. Sizes are mana, surfaced as nominal units.
+  // NB: Manifold is play-money (mana). All mana figures are converted to
+  // approximate USD via MANIFOLD_USD_PER_MANA so they're comparable to real
+  // venues. `toUsd` is the single conversion point.
   readonly capabilities = { wallets: true, trades: true, orderbook: false };
+  private mana = config.MANIFOLD_USD_PER_MANA;
+  private toUsd = (n: number | null | undefined): number | null =>
+    n == null ? null : n * this.mana;
   private base = config.MANIFOLD_API_BASE;
   private headers: Record<string, string> = config.MANIFOLD_API_KEY
     ? { authorization: `Key ${config.MANIFOLD_API_KEY}` }
@@ -68,7 +75,7 @@ export class ManifoldCollector implements Collector {
 
       for (const m of res) {
         const title = m.question ?? m.slug ?? '';
-        if (seen.has(m.id) || !isWorldCup2026(title)) continue;
+        if (seen.has(m.id) || !isWorldCup2026(title, m.slug)) continue;
         seen.add(m.id);
         const eventType = classifyEventType(title);
         const team = extractTeam(title);
@@ -84,8 +91,8 @@ export class ManifoldCollector implements Collector {
           startTime: m.createdTime ? new Date(m.createdTime) : null,
           closeTime: m.closeTime ? new Date(m.closeTime) : null,
           status: m.isResolved ? 'resolved' : 'open',
-          volumeUsd: m.volume ?? null,
-          liquidityUsd: m.totalLiquidity ?? null,
+          volumeUsd: this.toUsd(m.volume),
+          liquidityUsd: this.toUsd(m.totalLiquidity),
           outcomes:
             m.outcomeType === 'BINARY'
               ? [
@@ -101,6 +108,8 @@ export class ManifoldCollector implements Collector {
           title,
           canonicalKey: buildCanonicalKey(eventType, team, title),
           meta: { contractId: m.id },
+          liquidityUsd: this.toUsd(m.totalLiquidity),
+          volumeUsd: this.toUsd(m.volume),
           outcomes: [{ name: 'YES' }, { name: 'NO' }],
         });
       }
@@ -123,22 +132,29 @@ export class ManifoldCollector implements Collector {
 
     const out: NormalizedTrade[] = [];
     for (const b of bets) {
-      if (b.isRedemption) continue;
+      // Skip non-trades: redemptions, ante, and liquidity provision (the last has
+      // a large `amount` but isn't trading volume — it was inflating "trades").
+      if (b.isRedemption || b.isAnte || b.isLiquidityProvision) continue;
       const tsMs = b.createdTime ?? 0;
       if (tsMs <= sinceMs) continue;
-      const price = b.probAfter ?? b.probBefore ?? null;
+      const yesProb = b.probAfter ?? b.probBefore ?? null;
       const amount = b.amount ?? 0;
-      if (price == null) continue;
+      if (yesProb == null || amount === 0) continue;
+      // Manifold bets are BUYS of an outcome (YES/NO); a negative amount is a
+      // sale. Price is the backed outcome's price: YES→yesProb, NO→1−yesProb.
+      const outcome = (b.outcome ?? 'YES').toUpperCase();
+      const isNo = outcome === 'NO';
+      const price = isNo ? 1 - yesProb : yesProb;
       out.push({
         platform: this.platform,
         externalId: b.id,
         marketExternalId: contractId,
-        outcomeName: b.outcome ?? null,
+        outcomeName: isNo ? 'NO' : 'YES',
         wallet: b.userId ?? b.username ?? null,
-        side: (b.outcome ?? 'YES').toUpperCase() === 'NO' ? 'sell' : 'buy',
+        side: amount < 0 ? 'sell' : 'buy',
         price,
-        size: b.shares ?? amount,
-        sizeUsd: Math.abs(amount), // mana units (play money)
+        size: Math.abs(b.shares ?? amount),
+        sizeUsd: Math.abs(amount) * this.mana, // mana → approximate USD
         timestamp: new Date(tsMs),
         raw: b,
       });

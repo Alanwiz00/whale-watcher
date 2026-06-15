@@ -4,12 +4,16 @@ import { alertsEmitted } from './metrics.js';
 
 const log = logger.child({ svc: 'engine', mod: 'alerts' });
 
+// The "whales" channel is the high-signal feed the dashboard Live tab shows:
+// notable big trades + sudden volume accumulation only.
 const CHANNEL_BY_TYPE: Record<string, string> = {
   whale_trade: CHANNELS.whales,
   split_accumulation: CHANNELS.whales,
   smart_money: CHANNELS.whales,
+  volume_anomaly: CHANNELS.whales,
   steam_move: CHANNELS.steam,
   arbitrage: CHANNELS.arbitrage,
+  wallet_anomaly: CHANNELS.alerts,
 };
 
 /**
@@ -21,15 +25,13 @@ export async function emitAlert(
   payload: AlertPayload,
   refs?: { marketId?: string; walletId?: string | null },
 ): Promise<boolean> {
-  const existing = await prisma.alert.findUnique({
-    where: { dedupeKey: payload.dedupeKey },
-    select: { id: true },
-  });
-  if (existing) return false;
-
-  try {
-    await prisma.alert.create({
-      data: {
+  // Atomic, race-free dedupe: createMany + skipDuplicates compiles to
+  // `INSERT ... ON CONFLICT DO NOTHING`, so a concurrent duplicate is skipped at
+  // the DB without raising (and logging) a unique-constraint violation. count===0
+  // means the alert already existed → don't re-publish.
+  const { count } = await prisma.alert.createMany({
+    data: [
+      {
         type: payload.type,
         severity: payload.severity,
         platform: payload.platform,
@@ -40,12 +42,10 @@ export async function emitAlert(
         data: payload.data as Prisma.InputJsonValue,
         dedupeKey: payload.dedupeKey,
       },
-    });
-  } catch (err) {
-    // Unique race: another worker inserted the same dedupeKey first.
-    log.debug({ err: String(err), dedupeKey: payload.dedupeKey }, 'alert insert race, skipping');
-    return false;
-  }
+    ],
+    skipDuplicates: true,
+  });
+  if (count === 0) return false;
 
   const message = JSON.stringify(payload);
   const channel = CHANNEL_BY_TYPE[payload.type] ?? CHANNELS.alerts;

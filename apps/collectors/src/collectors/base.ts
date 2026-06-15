@@ -17,6 +17,9 @@ export interface TrackedMarket {
   canonicalKey?: string | null;
   meta: Record<string, unknown>;
   outcomes: Array<{ name: string; externalId?: string | null }>;
+  /** Liquidity / cumulative volume (USD) — used to skip polling dead markets. */
+  liquidityUsd?: number | null;
+  volumeUsd?: number | null;
   /** Last trade timestamp ingested for this market (poll cursor). */
   lastTradeAt?: Date;
 }
@@ -48,10 +51,26 @@ export interface Collector {
   fetchOrderBook?(market: TrackedMarket): Promise<NormalizedOrderBook[]>;
 }
 
-/** Shared World Cup 2026 relevance test used by every collector. */
-export function isWorldCup2026(title: string): boolean {
-  const t = title.toLowerCase();
-  if (t.includes('world cup') && (t.includes('2026') || t.includes('fifa'))) return true;
+/**
+ * Shared FIFA World Cup 2026 relevance test. Pass any combination of title,
+ * slug, and event/series name — match markets ("Brazil vs Argentina") often
+ * only carry the World-Cup signal in the slug or parent event, not the title.
+ *
+ * Hardened to be the *FIFA national-team* World Cup only: explicitly excludes
+ * look-alikes (FIFA Club World Cup, Cricket/Rugby/etc. World Cups).
+ */
+export function isWorldCup2026(...texts: Array<string | null | undefined>): boolean {
+  // Normalize hyphen/underscore so slugs ("fifa-world-cup-2026") match too.
+  const t = texts
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ');
+  // Different tournaments / sports that also say "world cup" — never ours.
+  if (/club world cup|cricket|rugby|t20|netball|world cup of hockey|lacrosse|under[- ]?\d/.test(t)) {
+    return false;
+  }
   if (t.includes('world cup 2026') || t.includes('fifa world cup')) return true;
+  if (t.includes('world cup') && (t.includes('2026') || t.includes('fifa'))) return true;
   return false;
 }

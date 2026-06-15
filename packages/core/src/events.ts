@@ -5,17 +5,19 @@
  */
 import type { NormalizedMarket, NormalizedOrderBook, NormalizedTrade } from './types.js';
 
+// NB: BullMQ forbids ':' in queue names (it's the Redis key separator), so we
+// use '-'. Redis pub/sub CHANNELS (see redis.ts) may still use ':'.
 export const QUEUES = {
   /** Raw normalized markets discovered by collectors → upserted by engine. */
-  markets: 'q:markets',
+  markets: 'q-markets',
   /** Raw normalized trades → persisted + run through detection. */
-  trades: 'q:trades',
+  trades: 'q-trades',
   /** Order book snapshots → persisted + feed impact/steam detectors. */
-  orderbooks: 'q:orderbooks',
+  orderbooks: 'q-orderbooks',
   /** Recompute wallet stats for a wallet (debounced). */
-  walletStats: 'q:wallet-stats',
+  walletStats: 'q-wallet-stats',
   /** Cross-platform arbitrage scan trigger. */
-  arbitrage: 'q:arbitrage',
+  arbitrage: 'q-arbitrage',
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

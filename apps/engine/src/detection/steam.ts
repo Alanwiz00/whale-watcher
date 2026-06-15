@@ -1,4 +1,4 @@
-import { config, logger, type Platform } from '@whale/core';
+import { config, logger, PLAY_MONEY_PLATFORMS, type Platform } from '@whale/core';
 import { prisma } from '@whale/db';
 import { emitAlert } from '../alerts.js';
 
@@ -17,7 +17,14 @@ export async function detectSteam(
   outcomeName: string | null,
   currentProb: number,
   at: Date,
+  liquidityUsd?: number | null,
 ): Promise<void> {
+  // Play-money venues don't produce tradeable steam; skip them.
+  if (PLAY_MONEY_PLATFORMS.includes(platform)) return;
+  // Require *known* real liquidity — unknown/thin order books are skipped, not
+  // given the benefit of the doubt (that's where the noise comes from).
+  if ((liquidityUsd ?? 0) < config.STEAM_MIN_LIQUIDITY_USD) return;
+
   const windowStart = new Date(at.getTime() - config.STEAM_WINDOW_MS);
   const outcomeFilter = outcomeName ? { OR: [{ outcomeName }, { outcomeName: null }] } : {};
 
@@ -32,6 +39,9 @@ export async function detectSteam(
 
   const movePct = (currentProb - fromProb) / fromProb;
   if (Math.abs(movePct) < config.STEAM_MOVE_PCT) return;
+  // Absolute-move floor: kills long-shot noise where a 0.1%→0.2% tick reads as
+  // a +100% relative move. Require a real shift in probability *points* too.
+  if (Math.abs(currentProb - fromProb) < config.STEAM_MIN_ABS_MOVE) return;
 
   // Is there a whale trade that explains the move?
   const whaleTrade = await prisma.trade.findFirst({

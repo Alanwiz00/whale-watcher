@@ -14,6 +14,17 @@ describe('classifyEventType', () => {
   it('detects group winner', () => {
     expect(classifyEventType('Group A winner')).toBe('group_winner');
   });
+  it('detects match result', () => {
+    expect(classifyEventType('Brazil vs Argentina')).toBe('match_result');
+    expect(classifyEventType('France to beat Morocco')).toBe('match_result');
+  });
+  it('detects per-match goal scorer', () => {
+    expect(classifyEventType('Mbappé anytime goalscorer vs England')).toBe('match_scorer');
+    expect(classifyEventType('Will Messi score a goal?')).toBe('match_scorer');
+  });
+  it('keeps tournament Golden Boot separate from match scorer', () => {
+    expect(classifyEventType('World Cup top goalscorer')).toBe('golden_boot');
+  });
   it('falls back to other', () => {
     expect(classifyEventType('Some unrelated market')).toBe('other');
   });

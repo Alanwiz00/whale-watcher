@@ -84,17 +84,27 @@ export async function ensureMarketId(
     select: { id: true },
   });
   if (existing) return existing.id;
-  const created = await prisma.market.create({
-    data: {
-      platform,
-      externalId,
-      title: title ?? externalId,
-      eventType: eventTypeEnum(classifyEventType(title ?? '')),
-      status: 'unknown',
-    },
+  // Atomic insert-if-absent: createMany + skipDuplicates → `ON CONFLICT DO
+  // NOTHING`, so a concurrent insert is a silent no-op (no unique-violation
+  // raised or logged). Then read the row (ours or the race winner's).
+  await prisma.market.createMany({
+    data: [
+      {
+        platform,
+        externalId,
+        title: title ?? externalId,
+        eventType: eventTypeEnum(classifyEventType(title ?? '')),
+        status: 'unknown',
+      },
+    ],
+    skipDuplicates: true,
+  });
+  const row = await prisma.market.findUnique({
+    where: { platform_externalId: { platform, externalId } },
     select: { id: true },
   });
-  return created.id;
+  if (!row) throw new Error(`ensureMarketId: ${platform}:${externalId} missing after upsert`);
+  return row.id;
 }
 
 export async function upsertWallet(
@@ -120,32 +130,35 @@ export async function persistTrade(t: NormalizedTrade): Promise<PersistedTrade> 
   const marketId = await ensureMarketId(t.platform, t.marketExternalId);
   const wallet = t.wallet ? await upsertWallet(t.platform, t.wallet) : null;
 
-  // Idempotent on (platform, externalId). `upsert` returns the row either way;
-  // we detect novelty by checking createdAt vs now within a small window.
-  const existing = await prisma.trade.findUnique({
+  // Atomic, race-free idempotency on (platform, externalId): createMany +
+  // skipDuplicates → `ON CONFLICT DO NOTHING`. `count === 1` means we inserted a
+  // genuinely new trade (run detection once); `count === 0` means it already
+  // existed (concurrent worker won) — no detection, no constraint-violation log.
+  const inserted = await prisma.trade.createMany({
+    data: [
+      {
+        platform: t.platform,
+        externalId: t.externalId,
+        marketId,
+        outcomeName: t.outcomeName ?? null,
+        walletId: wallet?.id ?? null,
+        walletAddress: t.wallet ?? null,
+        side: t.side,
+        price: t.price,
+        size: t.size,
+        sizeUsd: t.sizeUsd,
+        timestamp: t.timestamp,
+        raw: (t.raw ?? undefined) as Prisma.InputJsonValue | undefined,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  const row = await prisma.trade.findUnique({
     where: { platform_externalId: { platform: t.platform, externalId: t.externalId } },
     select: { id: true },
   });
-  if (existing) return { id: existing.id, marketId, walletId: wallet?.id ?? null, isNew: false };
-
-  const row = await prisma.trade.create({
-    data: {
-      platform: t.platform,
-      externalId: t.externalId,
-      marketId,
-      outcomeName: t.outcomeName ?? null,
-      walletId: wallet?.id ?? null,
-      walletAddress: t.wallet ?? null,
-      side: t.side,
-      price: t.price,
-      size: t.size,
-      sizeUsd: t.sizeUsd,
-      timestamp: t.timestamp,
-      raw: (t.raw ?? undefined) as Prisma.InputJsonValue | undefined,
-    },
-    select: { id: true },
-  });
-  return { id: row.id, marketId, walletId: wallet?.id ?? null, isNew: true };
+  if (!row) throw new Error(`persistTrade: ${t.platform}:${t.externalId} missing after upsert`);
+  return { id: row.id, marketId, walletId: wallet?.id ?? null, isNew: inserted.count === 1 };
 }
 
 export async function persistOrderBook(b: NormalizedOrderBook): Promise<string> {

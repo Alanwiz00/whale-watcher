@@ -17,10 +17,21 @@ async function main(): Promise<void> {
   const bot = createBot();
   await startAlertsSubscriber(bot);
 
-  // NB: telegraf's launch() promise only resolves when the bot STOPS, so we
-  // intentionally don't await it here — it runs for the process lifetime.
-  void bot.launch();
-  log.info('telegram bot launched (long polling)');
+  // NB: telegraf's launch() promise only resolves when the bot STOPS, and it
+  // REJECTS if the initial getMe can't reach Telegram (e.g. ETIMEDOUT). Guard +
+  // retry so a transient network blip doesn't crash the whole process.
+  const launch = () =>
+    bot
+      .launch({ dropPendingUpdates: true })
+      .catch((err) => {
+        log.error(
+          { err: String(err) },
+          'telegram launch failed (network/telegram unreachable) — retrying in 15s',
+        );
+        setTimeout(launch, 15_000);
+      });
+  void launch();
+  log.info('telegram bot launching (long polling)');
 
   const shutdown = async (sig: string) => {
     log.info({ sig }, 'shutting down bot');

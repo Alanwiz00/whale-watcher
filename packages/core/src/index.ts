@@ -7,4 +7,4 @@ export * from './redis.js';
 export * from './events.js';
 export * as quant from './quant.js';
 export * as scoring from './scoring.js';
-export { computeWhaleScore, classifyTier, DEFAULT_WEIGHTS } from './scoring.js';
+export { computeWhaleScore, classifyTier } from './scoring.js';

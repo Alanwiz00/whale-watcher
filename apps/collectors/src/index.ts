@@ -1,6 +1,7 @@
 import { config, logger } from '@whale/core';
 import { startMetricsServer } from './metrics.js';
 import { closeQueues } from './queues.js';
+import { registry } from './registry.js';
 import { registerSchedules } from './scheduler.js';
 import { runDiscovery, startCollectorWorker } from './worker.js';
 
@@ -9,6 +10,10 @@ const log = logger.child({ svc: 'collectors' });
 async function main(): Promise<void> {
   log.info({ env: config.NODE_ENV }, 'starting collectors service');
   startMetricsServer(config.METRICS_PORT);
+
+  // Restore persisted poll cursors BEFORE discovery so we resume from where we
+  // left off instead of re-pulling every market's recent trades.
+  await registry.hydrate();
 
   const worker = startCollectorWorker();
   await registerSchedules();

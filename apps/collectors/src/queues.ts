@@ -23,7 +23,7 @@ export const orderBooksQueue = new Queue<OrderBookJob>(QUEUES.orderbooks, {
 });
 
 /** Internal scheduling queue for repeatable collection ticks. */
-export const collectQueue = new Queue(QUEUES.markets + ':schedule', { connection });
+export const collectQueue = new Queue(QUEUES.markets + '-schedule', { connection });
 
 export async function closeQueues(): Promise<void> {
   await Promise.all([

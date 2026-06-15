@@ -6,15 +6,19 @@ import { COUNTRY_ALIASES, type EventType } from './constants.js';
  */
 export function classifyEventType(title: string): EventType {
   const t = title.toLowerCase();
-  if (/golden boot|top scorer|top goalscorer/.test(t)) return 'golden_boot';
+  // Tournament-level scorer (Golden Boot) before match-level scorer.
+  if (/golden boot|top (goal ?)?scorer|tournament top scorer/.test(t)) return 'golden_boot';
+  // Per-match goal scorer / player props.
+  if (/goal ?scorer|anytime scorer|first (goal|scorer)|to score(?! the most)|score a goal|score in\b|\bbrace\b|hat[- ]?trick/.test(t))
+    return 'match_scorer';
   if (/\bwin(?:s|ner)?\b.*world cup|world cup.*winner|win the (?:2026 )?world cup/.test(t))
     return 'tournament_winner';
   if (/group [a-l]\b.*win|win.*group [a-l]\b|group [a-l] winner/.test(t)) return 'group_winner';
-  if (/(reach|advance|qualif|make).*(final|semifinal|quarterfinal|round of|stage|knockout)/.test(t))
+  if (/(reach|advance|qualif|make).*(final|semifinal|quarterfinal|round of|stage|knockout|last \d+)/.test(t))
     return 'reach_stage';
   if (/total goals.*tournament|tournament.*total goals/.test(t)) return 'tournament_total_goals';
-  if (/total goals|over\/under|o\/u/.test(t)) return 'match_total_goals';
-  if (/\bvs\b|\bv\.\b| v |to beat|to win.*match/.test(t)) return 'match_result';
+  if (/total goals|over\/under|o\/u|both teams to score|\bbtts\b/.test(t)) return 'match_total_goals';
+  if (/\bvs\b|\bv\.\b| v |to beat|to win\b|to defeat|match winner|\bdraw\b/.test(t)) return 'match_result';
   if (/most goals.*team|team.*most goals/.test(t)) return 'top_scorer_team';
   return 'other';
 }
@@ -51,12 +55,16 @@ export function buildCanonicalKey(eventType: EventType, team: string | null, tit
         'stage';
       return `${base}:${team ?? 'team'}:${stage.replace(/\s+/g, '_')}`;
     }
-    case 'match_result': {
+    case 'match_result':
+    case 'match_scorer':
+    case 'match_total_goals': {
       const teams = Object.entries(COUNTRY_ALIASES)
         .filter(([, aliases]) => aliases.some((a) => new RegExp(`\\b${escapeRe(a)}\\b`).test(title.toLowerCase())))
         .map(([c]) => c)
         .sort();
-      return `${base}:match:${teams.join('_v_') || 'unknown'}`;
+      const kind =
+        eventType === 'match_scorer' ? 'scorer' : eventType === 'match_total_goals' ? 'goals' : 'match';
+      return `${base}:${kind}:${teams.join('_v_') || 'unknown'}`;
     }
     default:
       return `${base}:other:${team ?? 'na'}`;

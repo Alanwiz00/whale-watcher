@@ -15,8 +15,18 @@ const SCHEDULE_QUEUE = collectQueue.name;
 
 type Stage = 'discovery' | 'trades' | 'orderbooks';
 
-/** Per-platform fetch concurrency to stay polite to venue rate limits. */
-const limit = pLimit(8);
+/** Global fetch concurrency to stay polite to venue rate limits / avoid resets. */
+const limit = pLimit(config.COLLECTOR_CONCURRENCY);
+
+/** Skip polling markets with negligible liquidity+volume (they have no whales). */
+function isActive(m: { liquidityUsd?: number | null; volumeUsd?: number | null }): boolean {
+  const known = m.liquidityUsd != null || m.volumeUsd != null;
+  if (!known) return true; // unknown → poll it
+  return (m.liquidityUsd ?? 0) + (m.volumeUsd ?? 0) >= config.MIN_POLL_LIQUIDITY_USD;
+}
+
+/** Small random delay to de-synchronize bursts of requests to one host. */
+const jitter = () => new Promise((r) => setTimeout(r, Math.random() * 250));
 
 async function runDiscovery(): Promise<void> {
   const end = timer('discovery');
@@ -44,17 +54,23 @@ async function runDiscovery(): Promise<void> {
 
 async function runTrades(): Promise<void> {
   const end = timer('trades');
-  const markets = registry.all();
+  const markets = registry.all().filter(isActive);
   await Promise.all(
     markets.map((m) =>
       limit(async () => {
         const c = collectors.find((x) => x.platform === m.platform);
         if (!c?.capabilities.trades || !c.fetchTrades) return;
         try {
+          await jitter();
           const trades = await c.fetchTrades(m);
           let maxTs = m.lastTradeAt?.getTime() ?? 0;
           for (const trade of trades) {
-            await tradesQueue.add('trade', { trade }, DEFAULT_JOB_OPTS);
+            // Dedupe by a stable, colon-free job id so the same trade can't be
+            // enqueued (and processed) twice. BullMQ ignores adds with an id that
+            // already exists (incl. recently-completed), which removes the
+            // concurrent-insert race in the engine. (jobIds can't contain ':'.)
+            const jobId = `t-${trade.platform}-${trade.externalId}`.replace(/:/g, '-');
+            await tradesQueue.add('trade', { trade }, { ...DEFAULT_JOB_OPTS, jobId });
             maxTs = Math.max(maxTs, trade.timestamp.getTime());
           }
           if (trades.length) {
@@ -73,13 +89,14 @@ async function runTrades(): Promise<void> {
 
 async function runOrderBooks(): Promise<void> {
   const end = timer('orderbooks');
-  const markets = registry.all();
+  const markets = registry.all().filter(isActive);
   await Promise.all(
     markets.map((m) =>
       limit(async () => {
         const c = collectors.find((x) => x.platform === m.platform);
         if (!c?.capabilities.orderbook || !c.fetchOrderBook) return;
         try {
+          await jitter();
           const books = await c.fetchOrderBook(m);
           for (const book of books) await orderBooksQueue.add('book', { book }, DEFAULT_JOB_OPTS);
         } catch (err) {

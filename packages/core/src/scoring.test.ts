@@ -10,38 +10,75 @@ describe('classifyTier', () => {
   });
 });
 
-describe('computeWhaleScore', () => {
+describe('computeWhaleScore (threshold-anchored)', () => {
+  const THRESH = 1000;
+
   it('returns a 0–100 score with components', () => {
-    const r = computeWhaleScore({ sizeUsd: 300_000 });
+    const r = computeWhaleScore({ sizeUsd: 5_000, thresholdUsd: THRESH });
     expect(r.score).toBeGreaterThanOrEqual(0);
     expect(r.score).toBeLessThanOrEqual(100);
     expect(r.components.positionSize).toBeGreaterThan(0);
   });
 
-  it('is monotonic in position size', () => {
-    const small = computeWhaleScore({ sizeUsd: 300_000 }).score;
-    const big = computeWhaleScore({ sizeUsd: 5_000_000 }).score;
-    expect(big).toBeGreaterThan(small);
+  it('a trade AT the threshold is always at least Notable (medium-worthy)', () => {
+    const r = computeWhaleScore({ sizeUsd: THRESH, thresholdUsd: THRESH });
+    expect(r.score).toBe(50);
+    expect(r.tier).toBe('Notable Whale');
   });
 
-  it('rewards strong historical ROI (with enough samples)', () => {
-    const base = { sizeUsd: 500_000, marketImpactPct: 0.05 };
+  it('a sub-threshold-but-scored trade never drops below the anchor', () => {
+    // detectWhale gates on size, but the score floor must hold regardless.
+    const r = computeWhaleScore({ sizeUsd: THRESH / 10, thresholdUsd: THRESH });
+    expect(r.score).toBeGreaterThanOrEqual(50);
+  });
+
+  it('2× threshold reaches Strong (high)', () => {
+    const r = computeWhaleScore({ sizeUsd: 2 * THRESH, thresholdUsd: THRESH });
+    expect(r.score).toBeGreaterThanOrEqual(75);
+    expect(r.tier).toBe('Strong Whale');
+  });
+
+  it('scales with how far above the threshold it is (until the size cap)', () => {
+    const atThreshold = computeWhaleScore({ sizeUsd: THRESH, thresholdUsd: THRESH }).score;
+    const bigger = computeWhaleScore({ sizeUsd: 2.5 * THRESH, thresholdUsd: THRESH }).score;
+    expect(bigger).toBeGreaterThan(atThreshold);
+  });
+
+  it('the same multiple of the threshold scores the same regardless of absolute size', () => {
+    const a = computeWhaleScore({ sizeUsd: 2_000, thresholdUsd: 1_000 }).score;
+    const b = computeWhaleScore({ sizeUsd: 600_000, thresholdUsd: 300_000 }).score;
+    expect(a).toBe(b); // both are 2× the threshold
+  });
+
+  it('rewards strong historical ROI as a bonus (with enough samples)', () => {
+    const base = { sizeUsd: 5_000, thresholdUsd: THRESH, marketImpactPct: 0.05 };
     const sharp = computeWhaleScore({ ...base, walletRoi: 0.6, walletSampleSize: 50 }).score;
     const dumb = computeWhaleScore({ ...base, walletRoi: -0.4, walletSampleSize: 50 }).score;
     expect(sharp).toBeGreaterThan(dumb);
   });
 
+  it('a negative-ROI whale is not dragged below its size anchor', () => {
+    const r = computeWhaleScore({
+      sizeUsd: THRESH,
+      thresholdUsd: THRESH,
+      walletRoi: -0.9,
+      walletSampleSize: 50,
+    });
+    expect(r.score).toBe(50); // still Notable — it's still a real whale
+  });
+
   it('shrinks ROI influence when sample size is tiny', () => {
-    const base = { sizeUsd: 500_000 };
+    const base = { sizeUsd: 5_000, thresholdUsd: THRESH };
     const lowN = computeWhaleScore({ ...base, walletRoi: 1.0, walletSampleSize: 1 }).components.historicalRoi;
     const highN = computeWhaleScore({ ...base, walletRoi: 1.0, walletSampleSize: 50 }).components.historicalRoi;
     expect(highN).toBeGreaterThan(lowN);
-    expect(lowN).toBeCloseTo(0.5, 1); // ~neutral with no evidence
+    expect(lowN).toBeCloseTo(0.5, 1);
   });
 
-  it('an elite profile clears the 90 threshold', () => {
+  it('a large + sharp + impactful + well-timed whale reaches Elite (≥90)', () => {
     const r = computeWhaleScore({
-      sizeUsd: 8_000_000,
+      sizeUsd: 10 * THRESH,
+      thresholdUsd: THRESH,
       walletRoi: 0.8,
       walletSampleSize: 100,
       marketImpactPct: 0.15,
@@ -49,15 +86,5 @@ describe('computeWhaleScore', () => {
     });
     expect(r.score).toBeGreaterThanOrEqual(90);
     expect(r.tier).toBe('Elite Whale');
-  });
-
-  it('respects custom weights', () => {
-    const onlyImpact = computeWhaleScore({
-      sizeUsd: 1,
-      marketImpactPct: 0.2,
-      weights: { positionSize: 0, historicalRoi: 0, marketImpact: 1, timing: 0 },
-    });
-    expect(onlyImpact.components.marketImpact).toBeGreaterThan(0);
-    expect(onlyImpact.score).toBeGreaterThan(0);
   });
 });

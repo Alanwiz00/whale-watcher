@@ -102,6 +102,8 @@ export class KalshiCollector implements Collector {
           title,
           canonicalKey: buildCanonicalKey(eventType, team, title),
           meta: { ticker: m.ticker },
+          liquidityUsd: cents(m.liquidity),
+          volumeUsd: m.volume ?? null,
           outcomes: [{ name: 'Yes' }, { name: 'No' }],
         });
       }

@@ -31,14 +31,21 @@ export async function startAlertsSubscriber(bot: Telegraf): Promise<void> {
     } catch {
       return;
     }
+
+    // Bot-side size gate: the engine detects/stores whales at WHALE_THRESHOLD_USD
+    // (rich dashboard), but Telegram only pings for trades/accumulations ≥
+    // TELEGRAM_MIN_ALERT_USD. Non-size alerts (steam/arb/volume/wallet) use their
+    // own detection thresholds and are unaffected.
+    const usd = alertUsd(alert);
+    if (usd != null && usd < config.TELEGRAM_MIN_ALERT_USD) return;
+
     const text = render(alert);
 
     const targets = new Set<string>();
-    if (
-      config.TELEGRAM_ALERT_CHAT_ID &&
-      (alert.severity === 'high' || alert.severity === 'critical')
-    ) {
-      targets.add(config.TELEGRAM_ALERT_CHAT_ID);
+    // Default broadcast chats get medium+ severity (low = e.g. small "Normal"
+    // whales, which would be too chatty). /live chats get everything.
+    if (alert.severity !== 'low') {
+      for (const id of config.TELEGRAM_ALERT_CHAT_ID) targets.add(id);
     }
     const subs = await redis().smembers(SUBS_KEY);
     for (const s of subs) targets.add(s);
@@ -53,7 +60,19 @@ export async function startAlertsSubscriber(bot: Telegraf): Promise<void> {
     }
   });
 
-  log.info('telegram alert subscriber ready');
+  log.info(
+    { minAlertUsd: config.TELEGRAM_MIN_ALERT_USD },
+    'telegram alert subscriber ready',
+  );
+}
+
+/** USD magnitude of a size/volume-based alert, or null if the gate doesn't apply. */
+function alertUsd(a: AlertPayload): number | null {
+  const d = (a.data ?? {}) as Record<string, unknown>;
+  if (a.type === 'whale_trade') return Number(d.sizeUsd) || null;
+  if (a.type === 'split_accumulation') return Number(d.aggregateUsd) || null;
+  if (a.type === 'volume_anomaly') return Number(d.latestUsd) || null;
+  return null;
 }
 
 function render(a: AlertPayload): string {

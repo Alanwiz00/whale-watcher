@@ -52,7 +52,9 @@ export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promi
       const transient =
         err instanceof HttpError === false && attempt < retries; // network/abort errors
       if (transient) {
-        log.warn({ url: full, attempt, err: String(err) }, 'fetch retry');
+        // Debug-level: these self-heal on retry, so they shouldn't spam logs.
+        // `cause` surfaces the real reason (ECONNRESET / connect timeout / DNS).
+        log.debug({ url: full, attempt, reason: causeOf(err) }, 'fetch retry');
         await backoff(attempt);
         attempt++;
         continue;
@@ -69,6 +71,17 @@ function qs(query: Record<string, string | number | boolean | undefined>): strin
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
     .join('&');
+}
+
+/** Extract the underlying cause of a `fetch failed` TypeError for diagnostics. */
+function causeOf(err: unknown): string {
+  if (err instanceof Error) {
+    const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+    if (cause?.code) return cause.code;
+    if (cause?.message) return cause.message;
+    return err.message;
+  }
+  return String(err);
 }
 
 async function safeText(res: Response): Promise<string> {

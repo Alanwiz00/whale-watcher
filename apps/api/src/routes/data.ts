@@ -191,6 +191,11 @@ export async function dataRoutes(app: FastifyInstance): Promise<void> {
     const limit = intParam(q.limit, 50);
     const where: Prisma.AlertWhereInput = {};
     if (q.type) where.type = q.type as Prisma.AlertWhereInput['type'];
+    // Comma-separated multi-type filter, e.g. ?types=whale_trade,split_accumulation
+    if (q.types) {
+      const list = q.types.split(',').map((s) => s.trim()).filter(Boolean);
+      if (list.length) where.type = { in: list as Prisma.EnumAlertTypeFilter['in'] };
+    }
     if (q.severity) where.severity = q.severity as Prisma.AlertWhereInput['severity'];
     const rows = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit });
     return rows;

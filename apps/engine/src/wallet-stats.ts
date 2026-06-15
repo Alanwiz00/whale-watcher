@@ -142,24 +142,20 @@ export async function computeWalletStats(walletId: string): Promise<void> {
 }
 
 /**
- * Recompute leaderboard ranks. Cheap enough to run periodically; for very large
- * wallet counts move to a materialized view (see DEPLOYMENT.md).
+ * Recompute leaderboard ranks in two set-based UPDATEs using window functions.
+ * Far cheaper than the previous per-row transaction (which fired up to ~20k
+ * UPDATE statements and hogged a pooled connection). For very large wallet
+ * counts, promote this to a materialized view (see DEPLOYMENT.md).
  */
 export async function recomputeRanks(): Promise<void> {
-  const byRoi = await prisma.walletStats.findMany({
-    orderBy: { roi: 'desc' },
-    select: { id: true },
-    take: 10_000,
-  });
-  const byVol = await prisma.walletStats.findMany({
-    orderBy: { totalStakedUsd: 'desc' },
-    select: { id: true },
-    take: 10_000,
-  });
-  await prisma.$transaction([
-    ...byRoi.map((w, i) => prisma.walletStats.update({ where: { id: w.id }, data: { rankRoi: i + 1 } })),
-    ...byVol.map((w, i) =>
-      prisma.walletStats.update({ where: { id: w.id }, data: { rankVolume: i + 1 } }),
-    ),
-  ]);
+  await prisma.$executeRaw`
+    UPDATE wallet_stats ws
+    SET "rankRoi" = r.rn
+    FROM (SELECT id, row_number() OVER (ORDER BY roi DESC) AS rn FROM wallet_stats) r
+    WHERE ws.id = r.id`;
+  await prisma.$executeRaw`
+    UPDATE wallet_stats ws
+    SET "rankVolume" = r.rn
+    FROM (SELECT id, row_number() OVER (ORDER BY "totalStakedUsd" DESC) AS rn FROM wallet_stats) r
+    WHERE ws.id = r.id`;
 }

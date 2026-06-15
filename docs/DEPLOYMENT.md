@@ -75,4 +75,4 @@ SELECT add_retention_policy('order_books', INTERVAL '30 days');
 | `*_INTERVAL_MS`        | discovery / trades / orderbook poll cadence        |
 
 Lower poll intervals = fresher data + more API calls. Mind venue rate limits
-(especially The Odds API quota — it's discovery-only by design).
+(especially the API-Football daily quota — it's discovery-only + page-capped by design).

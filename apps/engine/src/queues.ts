@@ -10,13 +10,13 @@ export const walletStatsQueue = new Queue<WalletStatsJob>(QUEUES.walletStats, {
 });
 
 /** Internal repeatable scans (arbitrage / anomaly / ranks). */
-export const scanQueue = new Queue('q:engine:scan', { connection });
+export const scanQueue = new Queue('q-engine-scan', { connection });
 
 export function enqueueWalletStats(walletId: string, platform: string): Promise<unknown> {
   return walletStatsQueue.add(
     'recompute',
     { wallet: walletId, platform },
-    { jobId: `ws:${walletId}`, delay: 3_000, removeOnComplete: true, removeOnFail: 100 },
+    { jobId: `ws-${walletId}`, delay: 3_000, removeOnComplete: true, removeOnFail: 100 },
   );
 }
 

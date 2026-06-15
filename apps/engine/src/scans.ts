@@ -1,4 +1,4 @@
-import { logger, quant, type Platform } from '@whale/core';
+import { config, logger, quant, type Platform } from '@whale/core';
 import { prisma } from '@whale/db';
 import { emitAlert } from './alerts.js';
 import { IsolationForest } from './anomaly.js';
@@ -68,19 +68,39 @@ export async function detectVolumeAnomalies(): Promise<number> {
 }
 
 /**
- * Wallet behavior anomaly: build feature vectors over active wallets and run an
- * Isolation Forest. High anomaly scores surface wallets whose size/frequency/
- * performance profile is unlike the population — candidate smart money or
- * manipulation. Features are normalized to comparable scales.
+ * Smart-money wallet signal (formerly raw "wallet anomaly").
+ *
+ * A pure Isolation Forest over mark-to-market stats just flags statistical
+ * oddballs — including tiny-stake accounts and losers — which isn't actionable.
+ * Instead we only surface wallets that are ALL of:
+ *   1. serious      — staked ≥ WALLET_ALERT_MIN_STAKE_USD and ≥ MIN_TRADES trades
+ *   2. profitable   — ROI ≥ MIN_ROI and win-rate ≥ MIN_WIN_RATE
+ *   3. a standout   — a high Isolation-Forest score vs the serious-wallet pool
+ * Negative/low-stake oddballs are ignored. Fires rarely, once per wallet/day,
+ * and explains *why* (ROI, win-rate, sample, stake).
  */
+const SMART_WALLET = {
+  MIN_TRADES: 8,
+  MIN_ROI: 0.15, // mark-to-market; converges to realized as markets settle
+  MIN_WIN_RATE: 0.5,
+  SCORE_FLOOR: 0.72, // Isolation-Forest standout threshold
+  MIN_POOL: 20, // need enough serious wallets to define "unusual"
+} as const;
+
 export async function detectWalletAnomalies(): Promise<number> {
   const stats = await prisma.walletStats.findMany({
-    where: { trades: { gte: 3 } },
+    where: {
+      // Manifold is included via its mana→USD conversion; the stake floor (USD)
+      // naturally keeps tiny play-money wallets out.
+      totalStakedUsd: { gte: config.WALLET_ALERT_MIN_STAKE_USD },
+      trades: { gte: SMART_WALLET.MIN_TRADES },
+    },
     orderBy: { totalStakedUsd: 'desc' },
     take: 5_000,
     select: {
       walletId: true,
       trades: true,
+      resolvedPositions: true,
       totalStakedUsd: true,
       avgPositionUsd: true,
       roi: true,
@@ -88,7 +108,7 @@ export async function detectWalletAnomalies(): Promise<number> {
       sharpe: true,
     },
   });
-  if (stats.length < 20) return 0;
+  if (stats.length < SMART_WALLET.MIN_POOL) return 0;
 
   const features = stats.map((s) => [
     Math.log10(Number(s.totalStakedUsd) + 1),
@@ -98,39 +118,55 @@ export async function detectWalletAnomalies(): Promise<number> {
     s.winRate,
     quant.clamp(s.sharpe, -5, 5),
   ]);
-
   const forest = new IsolationForest(120, 256).fit(features);
 
   let flagged = 0;
   for (let i = 0; i < stats.length; i++) {
-    const score = forest.score(features[i]!);
-    if (score < 0.66) continue;
     const s = stats[i]!;
+    // Must be profitable smart money, not just statistically weird.
+    if (s.roi < SMART_WALLET.MIN_ROI || s.winRate < SMART_WALLET.MIN_WIN_RATE) continue;
+    const score = forest.score(features[i]!);
+    if (score < SMART_WALLET.SCORE_FLOOR) continue;
+
     const wallet = await prisma.wallet.findUnique({
       where: { id: s.walletId },
       select: { address: true, platform: true },
     });
     if (!wallet) continue;
+
+    const usd = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
+    const sample =
+      s.resolvedPositions > 0 ? `${s.resolvedPositions} resolved` : 'mark-to-market';
     const emitted = await emitAlert(
       {
         type: 'wallet_anomaly',
-        severity: score >= 0.72 ? 'high' : 'medium',
+        // High only when it's both a strong standout AND strongly profitable.
+        severity: score >= 0.78 && s.roi >= 0.4 ? 'high' : 'medium',
         platform: wallet.platform,
-        title: 'Unusual Wallet Behavior',
+        title: 'Smart-Money Wallet',
         body: [
           `Platform: ${wallet.platform}`,
           `Wallet: ${wallet.address}`,
-          `Anomaly score: ${(score * 100).toFixed(0)}/100`,
-          `ROI ${(s.roi * 100).toFixed(0)}% · ${s.trades} trades · staked $${Number(s.totalStakedUsd).toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+          `ROI ${(s.roi * 100).toFixed(0)}% · win ${(s.winRate * 100).toFixed(0)}% (${sample})`,
+          `Staked ${usd(Number(s.totalStakedUsd))} · ${s.trades} trades · avg ${usd(Number(s.avgPositionUsd))}`,
+          `Standout score ${(score * 100).toFixed(0)}/100`,
         ].join('\n'),
-        data: { anomalyScore: score, roi: s.roi, trades: s.trades, sharpe: s.sharpe },
-        dedupeKey: `walletanom:${s.walletId}:${Math.floor(Date.now() / (24 * HOUR))}`,
+        data: {
+          anomalyScore: score,
+          roi: s.roi,
+          winRate: s.winRate,
+          trades: s.trades,
+          resolvedPositions: s.resolvedPositions,
+          totalStakedUsd: Number(s.totalStakedUsd),
+          sharpe: s.sharpe,
+        },
+        dedupeKey: `smartwallet:${s.walletId}:${Math.floor(Date.now() / (24 * HOUR))}`,
         createdAt: new Date(),
       },
       { walletId: s.walletId },
     );
     if (emitted) flagged++;
   }
-  if (flagged) log.info({ flagged }, 'wallet anomalies flagged');
+  if (flagged) log.info({ flagged }, 'smart-money wallets flagged');
   return flagged;
 }

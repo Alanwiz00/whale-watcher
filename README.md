@@ -24,9 +24,9 @@ Honesty about data access matters in this domain:
 | Kalshi       | ✅ public REST    | ⚠️ anonymized        | **Implemented**                             |
 | Manifold     | ✅ public REST    | ✅ user ids (play $)  | **Implemented**                             |
 | PredictIt    | ⚠️ aggregate only | ❌                   | Best-effort (rarely has WC markets)         |
-| Betfair      | ⚠️ needs cert+funded acct | ❌            | Interface + stub (`ODDS_API` odds fallback) |
-| Pinnacle     | ❌ no open API    | ❌                   | Interface + stub (`ODDS_API` odds fallback) |
-| Stake / DK / FanDuel | ❌ no open trade API | ❌            | Interface + stub (odds-only via aggregator) |
+| Betfair      | ⚠️ needs cert+funded acct | ❌            | Odds-only via API-Football                   |
+| Pinnacle     | ❌ no open API    | ❌                   | Odds-only via API-Football                   |
+| Stake / DK / FanDuel | ❌ no open trade API | ❌            | Odds-only via API-Football                   |
 
 Sportsbooks expose **odds**, not identifiable bettor wallets. WhaleWatcher treats
 them as price feeds for arbitrage/steam detection, while genuine wallet-level

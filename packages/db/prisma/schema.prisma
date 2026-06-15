@@ -37,6 +37,7 @@ enum EventType {
   golden_boot
   group_winner
   match_result
+  match_scorer
   match_total_goals
   tournament_total_goals
   top_scorer_team

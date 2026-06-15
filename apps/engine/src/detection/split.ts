@@ -1,4 +1,5 @@
 import { config, logger, redis, type NormalizedTrade } from '@whale/core';
+import { prisma } from '@whale/db';
 import { emitAlert } from '../alerts.js';
 import type { PersistedTrade } from '../persist.js';
 
@@ -40,6 +41,17 @@ export async function detectSplitAccumulation(
   const bucket = Math.floor(nowMs / config.SPLIT_WINDOW_MS);
   const dedupeKey = `split:${trade.platform}:${trade.wallet}:${persisted.marketId}:${bucket}`;
 
+  const market = await prisma.market.findUnique({
+    where: { id: persisted.marketId },
+    select: { title: true },
+  });
+  const usd = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
+  const dir = trade.side === 'sell' ? '🔴 SELL' : '🟢 BUY';
+  // Per-leg breakdown, largest first: "$120k + $100k + $100k" (cap at 8 shown).
+  const legsDesc = [...sizes].sort((a, b) => b - a);
+  const shown = legsDesc.slice(0, 8).map(usd).join(' + ');
+  const breakdown = legsDesc.length > 8 ? `${shown} + … (${legsDesc.length - 8} more)` : shown;
+
   const emitted = await emitAlert(
     {
       type: 'split_accumulation',
@@ -48,18 +60,21 @@ export async function detectSplitAccumulation(
       title: 'Split Accumulation Detected',
       body: [
         `Platform: ${trade.platform}`,
+        `Market: ${market?.title ?? trade.marketExternalId}`,
         `Wallet: ${trade.wallet}`,
-        `Legs: ${members.length}`,
-        `Whale accumulated $${aggregate.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+        `Action: ${dir} ${trade.outcomeName ?? ''}`.trim(),
+        `Accumulated ${usd(aggregate)} across ${members.length} legs`,
+        `Breakdown: ${breakdown}`,
         `Window: ${Math.round(config.SPLIT_WINDOW_MS / 60000)} min`,
       ].join('\n'),
       data: {
         wallet: trade.wallet,
         legs: members.length,
         aggregateUsd: aggregate,
-        sizes,
+        sizes: legsDesc,
         side: trade.side,
         outcome: trade.outcomeName,
+        marketTitle: market?.title,
       },
       dedupeKey,
       createdAt: new Date(),

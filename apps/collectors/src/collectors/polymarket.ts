@@ -1,6 +1,7 @@
 import {
   buildCanonicalKey,
   classifyEventType,
+  config,
   extractTeam,
   logger,
   type NormalizedMarket,
@@ -8,7 +9,7 @@ import {
   type NormalizedTrade,
 } from '@whale/core';
 import { fetchJson } from '../http.js';
-import { isWorldCup2026, type Collector, type TrackedMarket } from './base.js';
+import type { Collector, TrackedMarket } from './base.js';
 
 const log = logger.child({ svc: 'collectors', platform: 'polymarket' });
 
@@ -33,6 +34,9 @@ interface GammaMarket {
   outcomes?: string; // JSON-encoded string[]
   outcomePrices?: string; // JSON-encoded string[]
   clobTokenIds?: string; // JSON-encoded string[]
+  // Parent event(s) — match markets carry the "World Cup" signal here, not in
+  // the per-market question.
+  events?: Array<{ title?: string; slug?: string }>;
 }
 
 interface DataApiTrade {
@@ -77,34 +81,33 @@ export class PolymarketCollector implements Collector {
   async discoverMarkets(): Promise<{ markets: NormalizedMarket[]; tracked: TrackedMarket[] }> {
     const markets: NormalizedMarket[] = [];
     const tracked: TrackedMarket[] = [];
-    const limit = 100;
+    const limit = 100; // Gamma caps page size at 100
+    const seen = new Set<string>();
 
-    // Page through active, open markets ordered by volume; cap pages to bound work.
-    for (let offset = 0; offset < 2_000; offset += limit) {
-      let page: GammaMarket[] = [];
-      try {
-        page = await fetchJson<GammaMarket[]>(`${GAMMA}/markets`, {
-          query: {
-            active: true,
-            closed: false,
-            limit,
-            offset,
-            order: 'volumeNum',
-            ascending: false,
-          },
-        });
-      } catch (err) {
-        log.warn({ err: String(err), offset }, 'gamma page fetch failed');
-        break;
-      }
-      if (!page.length) break;
+    // Discover by the World Cup TAG (not global volume): Polymarket has ~800 WC
+    // markets — winner, group, match winner, advance, scorer, props — and the
+    // match/scorer ones are low-volume, so a volume-ranked scan misses them.
+    // The tag guarantees relevance, so no title filter is needed.
+    for (const tagId of config.POLYMARKET_WC_TAG_IDS) {
+      for (let offset = 0; offset < 3_000; offset += limit) {
+        let page: GammaMarket[] = [];
+        try {
+          page = await fetchJson<GammaMarket[]>(`${GAMMA}/markets`, {
+            query: { closed: false, limit, offset, tag_id: tagId },
+          });
+        } catch (err) {
+          log.warn({ err: String(err), tagId, offset }, 'gamma page fetch failed');
+          break;
+        }
+        if (!page.length) break;
 
-      for (const m of page) {
-        const title = m.question ?? m.slug ?? '';
-        if (!title || !isWorldCup2026(title)) continue;
-        if (!m.conditionId) continue;
+        for (const m of page) {
+          if (!m.conditionId || seen.has(m.conditionId)) continue;
+          seen.add(m.conditionId);
+          const title = m.question ?? m.slug ?? '';
+          if (!title) continue;
 
-        const outcomeNames = parseJsonArray(m.outcomes);
+          const outcomeNames = parseJsonArray(m.outcomes);
         const prices = parseJsonArray(m.outcomePrices).map(Number);
         const tokenIds = parseJsonArray(m.clobTokenIds);
         const eventType = classifyEventType(title);
@@ -138,11 +141,14 @@ export class PolymarketCollector implements Collector {
           title,
           canonicalKey: buildCanonicalKey(eventType, team, title),
           meta: { conditionId: m.conditionId, tokenIds },
+          liquidityUsd: num(m.liquidityNum ?? m.liquidity),
+          volumeUsd: num(m.volumeNum ?? m.volume),
           outcomes: outcomes.map((o) => ({ name: o.name, externalId: o.externalId })),
         });
       }
 
-      if (page.length < limit) break;
+        if (page.length < limit) break;
+      }
     }
 
     log.info({ count: markets.length }, 'discovered polymarket WC markets');

@@ -28,12 +28,20 @@ export const ODDS_ONLY_PLATFORMS: Platform[] = [
   'fanduel',
 ];
 
+/**
+ * Play-money venues. Their prices/trades are useful as *signal* but are NOT
+ * real money — so they're excluded from cross-platform arbitrage and steam
+ * detection (an "arb" against play money isn't tradeable).
+ */
+export const PLAY_MONEY_PLATFORMS: Platform[] = ['manifold'];
+
 export const EVENT_TYPES = [
   'tournament_winner',
   'reach_stage',
   'golden_boot',
   'group_winner',
   'match_result',
+  'match_scorer',
   'match_total_goals',
   'tournament_total_goals',
   'top_scorer_team',

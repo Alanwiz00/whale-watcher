@@ -3,29 +3,39 @@ import { clamp, logistic01, saturating } from './quant.js';
 import type { WhaleScoreComponents } from './types.js';
 
 /**
- * Whale Score — a 0–100 composite of four weighted, normalized components:
+ * Whale Score — 0–100, **anchored to the configured whale threshold** so that
+ * any trade large enough to be a whale is always meaningful (≥ Notable), and
+ * the score scales with how far above the threshold it is:
  *
- *   score = 100 * ( w_size * sizeScore
- *                 + w_roi  * roiScore
- *                 + w_imp  * impactScore
- *                 + w_time * timingScore )
+ *   sizePts = clamp(50 + 25·log2(sizeUsd / thresholdUsd), 50, 85)
+ *     • exactly at threshold → 50  (Notable / medium)
+ *     • 2× threshold        → 75  (Strong / high)
+ *     • ~2.8× and beyond    → 85  (size cap)
  *
- * Each sub-score is normalized to [0,1] so weights are interpretable. Defaults
- * favor position size and historical ROI, the two strongest "smart money"
- * signals, while still rewarding measurable market impact and well-timed entries.
+ * Smart-money signals are *bonuses* added on top — they can lift a big trade to
+ * Elite but never drag a genuine whale below its size anchor:
+ *
+ *   score = sizePts + roiBonus(≤10) + impactBonus(≤7) + timingBonus(≤5)   (cap 100)
+ *
+ * Net effect: crossing WHALE_THRESHOLD_USD is always "effective" (broadcasts),
+ * and only large + sharp + impactful + well-timed trades reach Elite (≥90).
  */
-export const DEFAULT_WEIGHTS = {
-  positionSize: 0.35,
-  historicalRoi: 0.3,
-  marketImpact: 0.2,
-  timing: 0.15,
-} as const;
+
+/** Size anchor parameters. */
+const SIZE_BASE = 50; // points at exactly the threshold → medium
+const SIZE_SLOPE = 25; // points added per doubling above the threshold
+const SIZE_CAP = 85; // max points from size alone (leaves room for bonuses)
+
+/** Maximum bonus points per smart-money signal. */
+const ROI_BONUS = 10;
+const IMPACT_BONUS = 7;
+const TIMING_BONUS = 5;
 
 export interface WhaleScoreInput {
   /** Notional position size in USD. */
   sizeUsd: number;
-  /** Reference size at which the size sub-score saturates (~0.63 at ref). */
-  sizeRefUsd?: number;
+  /** Configured whale threshold (USD). The score is anchored to this. */
+  thresholdUsd: number;
   /** Historical ROI of the wallet (e.g. 0.38 = +38%). Null when unknown. */
   walletRoi?: number | null;
   /** Wallet win rate in [0,1]. Null when unknown. */
@@ -34,12 +44,8 @@ export interface WhaleScoreInput {
   walletSampleSize?: number;
   /** Signed market-impact fraction caused by the trade (e.g. 0.048 = +4.8%). */
   marketImpactPct?: number | null;
-  /**
-   * Timing quality in [0,1]: how early/contrarian the entry is relative to the
-   * eventual consensus move. 0.5 is neutral when unknown.
-   */
+  /** Timing quality in [0,1]; 0.5 is neutral when unknown. */
   timing?: number | null;
-  weights?: Partial<Record<keyof typeof DEFAULT_WEIGHTS, number>>;
 }
 
 export interface WhaleScoreResult {
@@ -48,13 +54,16 @@ export interface WhaleScoreResult {
   components: WhaleScoreComponents;
 }
 
-function sizeScore(sizeUsd: number, refUsd: number): number {
-  return saturating(Math.max(0, sizeUsd), refUsd);
+/** Size points anchored to the threshold: threshold→50, scales by log2, capped. */
+function sizePoints(sizeUsd: number, thresholdUsd: number): number {
+  const threshold = thresholdUsd > 0 ? thresholdUsd : 1;
+  const mult = Math.max(1, sizeUsd / threshold);
+  return clamp(SIZE_BASE + SIZE_SLOPE * Math.log2(mult), SIZE_BASE, SIZE_CAP);
 }
 
 /**
- * ROI sub-score: logistic around 0 ROI, scaled so +30% ROI ≈ 0.82. Shrunk
- * toward neutral (0.5) when sample size is small to avoid rewarding noise.
+ * ROI sub-score in [0,1]: logistic around 0 ROI, scaled so +30% ROI ≈ 0.82.
+ * Shrunk toward neutral (0.5) when the resolved-position sample is small.
  */
 function roiScore(walletRoi: number | null | undefined, sampleSize: number): number {
   if (walletRoi == null) return 0.5;
@@ -63,12 +72,13 @@ function roiScore(walletRoi: number | null | undefined, sampleSize: number): num
   return 0.5 + (raw - 0.5) * confidence;
 }
 
-/** Impact sub-score from |move|; saturates around a 10% move. */
+/** Impact sub-score in [0,1] from |move|; saturates around a 10% move. */
 function impactScore(impactPct: number | null | undefined): number {
   if (impactPct == null) return 0;
   return saturating(Math.abs(impactPct), 0.1);
 }
 
+/** Timing sub-score in [0,1]; 0.5 neutral when unknown. */
 function timingScore(timing: number | null | undefined): number {
   if (timing == null) return 0.5;
   return clamp(timing, 0, 1);
@@ -79,23 +89,24 @@ export function classifyTier(score: number): WhaleTier {
 }
 
 export function computeWhaleScore(input: WhaleScoreInput): WhaleScoreResult {
-  const w = { ...DEFAULT_WEIGHTS, ...input.weights };
-  const wsum = w.positionSize + w.historicalRoi + w.marketImpact + w.timing || 1;
+  const sizePts = sizePoints(input.sizeUsd, input.thresholdUsd);
+
+  const roiNorm = roiScore(input.walletRoi, input.walletSampleSize ?? 0);
+  const impactNorm = impactScore(input.marketImpactPct);
+  const timingNorm = timingScore(input.timing);
+
+  // Bonuses only add (clamped ≥ 0) so a real whale never scores below its anchor.
+  const roiPts = clamp((roiNorm - 0.5) * 2, 0, 1) * ROI_BONUS;
+  const impactPts = impactNorm * IMPACT_BONUS;
+  const timingPts = clamp((timingNorm - 0.5) * 2, 0, 1) * TIMING_BONUS;
+
+  const score = Math.round(clamp(sizePts + roiPts + impactPts + timingPts, 0, 100));
 
   const components: WhaleScoreComponents = {
-    positionSize: sizeScore(input.sizeUsd, input.sizeRefUsd ?? 500_000),
-    historicalRoi: roiScore(input.walletRoi, input.walletSampleSize ?? 0),
-    marketImpact: impactScore(input.marketImpactPct),
-    timing: timingScore(input.timing),
+    positionSize: sizePts / 100,
+    historicalRoi: roiNorm,
+    marketImpact: impactNorm,
+    timing: timingNorm,
   };
-
-  const weighted =
-    (w.positionSize * components.positionSize +
-      w.historicalRoi * components.historicalRoi +
-      w.marketImpact * components.marketImpact +
-      w.timing * components.timing) /
-    wsum;
-
-  const score = Math.round(clamp(weighted, 0, 1) * 100);
   return { score, tier: classifyTier(score), components };
 }
