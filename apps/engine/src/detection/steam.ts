@@ -65,7 +65,20 @@ export async function detectSteam(
 
   if (!noVisibleWhale) return; // explained by a visible whale; logged but not alerted as steam
 
-  const market = await prisma.market.findUnique({ where: { id: marketId }, select: { title: true } });
+  const market = await prisma.market.findUnique({
+    where: { id: marketId },
+    select: { title: true, volumeUsd: true },
+  });
+  const volumeUsd = market?.volumeUsd != null ? Number(market.volumeUsd) : null;
+  // Value gate: only ALERT on steam in markets with real money behind them. Thin
+  // longshot props (e.g. "most clean sheets") throw big % wiggles that aren't
+  // tradeable signal. The move is still recorded above — we just don't ping it.
+  if ((volumeUsd ?? 0) < config.STEAM_MIN_VOLUME_USD) {
+    log.debug({ marketId, volumeUsd, movePct }, 'steam below volume threshold — recorded, not alerted');
+    return;
+  }
+
+  const fmtUsd = (n: number | null) => (n == null ? 'n/a' : `$${Math.round(n).toLocaleString('en-US')}`);
   const bucket = Math.floor(at.getTime() / config.STEAM_WINDOW_MS);
   await emitAlert(
     {
@@ -77,15 +90,24 @@ export async function detectSteam(
         `Platform: ${platform}`,
         `Market: ${market?.title ?? marketId}`,
         `Move: ${(fromProb * 100).toFixed(1)}% → ${(currentProb * 100).toFixed(1)}% (${(movePct * 100).toFixed(1)}%)`,
+        `Market size: ${fmtUsd(volumeUsd)} vol · ${fmtUsd(liquidityUsd ?? null)} liq`,
         `Window: ${Math.round(config.STEAM_WINDOW_MS / 60000)} min`,
         `No visible whale trade — possible sharp syndicate activity`,
       ].join('\n'),
-      data: { fromProb, toProb: currentProb, movePct, outcome: outcomeName, marketTitle: market?.title },
+      data: {
+        fromProb,
+        toProb: currentProb,
+        movePct,
+        outcome: outcomeName,
+        marketTitle: market?.title,
+        volumeUsd,
+        liquidityUsd: liquidityUsd ?? null,
+      },
       dedupeKey: `steam:${platform}:${marketId}:${outcomeName ?? '_'}:${bucket}`,
       createdAt: new Date(),
     },
     { marketId },
   );
 
-  log.info({ marketId, movePct }, 'steam move flagged');
+  log.info({ marketId, movePct, volumeUsd }, 'steam move flagged');
 }

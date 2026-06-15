@@ -60,6 +60,11 @@ const schema = z.object({
   STEAM_MIN_LIQUIDITY_USD: num(5_000),
   /** Min absolute probability shift (points) for steam — kills long-shot noise. */
   STEAM_MIN_ABS_MOVE: num(0.02),
+  // Only ALERT on steam in markets with ≥ this cumulative volume (USD). Steam is
+  // still detected/recorded below this — it just won't ping. Filters thin
+  // longshot props whose % swings aren't tradeable. The steam equivalent of
+  // TELEGRAM_MIN_ALERT_USD; each alert shows market size so you can tune it.
+  STEAM_MIN_VOLUME_USD: num(50_000),
   ARB_MIN_EDGE: num(0.02),
   // Smart-money wallet signal: only consider wallets staking ≥ this much. Keeps
   // the "unusual wallet" alert to serious money instead of tiny-stake oddballs.
