@@ -5,6 +5,15 @@ WORKDIR /app
 
 FROM base AS build
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* are inlined at build time, so they must be present here (not just
+# at runtime). Pass via docker-compose build args. NEXT_PUBLIC_API_KEY is the
+# token the dashboard sends to the now key-gated API.
+ARG NEXT_PUBLIC_API_URL=http://localhost:4000
+ARG NEXT_PUBLIC_WS_URL=ws://localhost:4000/ws
+ARG NEXT_PUBLIC_API_KEY=
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL \
+    NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
 COPY pnpm-workspace.yaml package.json .npmrc ./
 COPY pnpm-lock.yaml* ./
 COPY tsconfig.base.json ./

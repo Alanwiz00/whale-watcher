@@ -1,8 +1,12 @@
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? '';
 
 /** Server-side fetch helper with no caching (dashboard is realtime-ish). */
 export async function api<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, { cache: 'no-store' });
+  const res = await fetch(`${API}${path}`, {
+    cache: 'no-store',
+    headers: API_KEY ? { authorization: `Bearer ${API_KEY}` } : undefined,
+  });
   if (!res.ok) throw new Error(`API ${res.status} for ${path}`);
   return res.json() as Promise<T>;
 }

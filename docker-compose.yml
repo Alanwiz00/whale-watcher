@@ -119,11 +119,14 @@ services:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
+      # NEXT_PUBLIC_* are baked into the bundle at build time. NEXT_PUBLIC_API_KEY
+      # must be one of the API's API_KEYS so the dashboard can reach the gated API.
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:4000/ws}
+        NEXT_PUBLIC_API_KEY: ${NEXT_PUBLIC_API_KEY:-}
     image: whalewatcher/web
     restart: unless-stopped
-    environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
-      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:4000/ws}
     depends_on:
       api: { condition: service_started }
     ports:

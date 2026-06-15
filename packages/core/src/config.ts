@@ -43,8 +43,10 @@ const schema = z.object({
   API_HOST: z.string().default('0.0.0.0'),
   API_PORT: num(4000),
   API_CORS_ORIGIN: z.string().default('*'),
+  // Comma-separated bearer tokens. When set, EVERY endpoint except infra
+  // (/health, /ready, /metrics) requires `Authorization: Bearer <token>`
+  // (or `?key=<token>` for the /ws handshake). Empty = auth disabled (dev).
   API_KEYS: csv,
-  INTERNAL_JWT_SECRET: z.string().default('dev-internal-secret'),
 
   WHALE_THRESHOLD_USD: num(300_000),
   // Ignore near-certainty BUYS (price ≥ this): paying ~99¢ to win $1 is risk-free

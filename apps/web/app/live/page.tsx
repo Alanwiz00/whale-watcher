@@ -11,8 +11,11 @@ interface FeedItem {
 }
 
 const BASE_WS = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:4000/ws';
-const WS_URL = `${BASE_WS}?channels=whales`;
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? '';
+// Key rides the query string for WS (no headers on browser handshakes).
+const WS_URL = `${BASE_WS}?channels=whales${API_KEY ? `&key=${encodeURIComponent(API_KEY)}` : ''}`;
+const AUTH_HEADERS: HeadersInit | undefined = API_KEY ? { authorization: `Bearer ${API_KEY}` } : undefined;
 
 // Only these alert types belong on the feed: notable big trades + sudden volume
 // accumulation. Anything else on the channel (incl. stray/test publishes) is
@@ -92,7 +95,7 @@ export default function LivePage() {
     let stop = false;
     const types = [...FEED_TYPES].join(',');
     const load = () =>
-      fetch(`${API_URL}/api/alerts?types=${types}&limit=80`)
+      fetch(`${API_URL}/api/alerts?types=${types}&limit=80`, { headers: AUTH_HEADERS })
         .then((r) => r.json())
         .then((rows: Array<{ type: string; severity: string; title: string; data: Record<string, unknown>; createdAt: string }>) => {
           if (stop) return;

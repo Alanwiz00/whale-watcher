@@ -4,14 +4,20 @@
 - All secrets come from env via the validated `@whale/core` config — never
   hard-coded. `.env` is git-ignored; only `.env.example` is committed.
 - Logger redacts `authorization`, tokens, passwords, and key paths.
-- Rotate `TELEGRAM_BOT_TOKEN`, `API_KEYS`, DB password, and `INTERNAL_JWT_SECRET`
-  on a schedule and on any suspected exposure.
+- Rotate `TELEGRAM_BOT_TOKEN`, `API_KEYS`, and the DB password on a schedule and
+  on any suspected exposure. Generate keys with `openssl rand -hex 32`.
 
 ## API surface
-- Read endpoints are public but **rate-limited** (`@fastify/rate-limit`, 240/min
-  per IP; `/health` and `/metrics` allow-listed).
-- Mutating/sensitive endpoints use `requireApiKey` (Bearer token in `API_KEYS`).
-  If `API_KEYS` is empty the guard is disabled — **set it in production**.
+- A global hook requires a Bearer token (`API_KEYS`) on **every** endpoint
+  except infra (`/health`, `/ready`, `/metrics`); the `/ws` handshake takes the
+  token as `?key=` since browsers can't set handshake headers. If `API_KEYS` is
+  empty the gate is disabled (dev) — **always set it in production**.
+- All requests are **rate-limited** (`@fastify/rate-limit`, 240/min per IP;
+  `/health` and `/metrics` allow-listed). CORS preflight (`OPTIONS`) bypasses the
+  key gate so cross-origin browser calls still work.
+- The dashboard sends `NEXT_PUBLIC_API_KEY` (baked into the bundle, so visible to
+  dashboard users — it must be one of `API_KEYS`, and isn't a true secret). Gate
+  the dashboard's own access (proxy/VPN) if it must be private.
 - CORS origin is restricted via `API_CORS_ORIGIN` (don't ship `*` in prod).
 - Body size capped (1 MB) and `trustProxy` enabled for correct client IPs
   behind Traefik/Dokploy.

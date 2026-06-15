@@ -1,4 +1,4 @@
-import { CHANNELS, createRedis, logger } from '@whale/core';
+import { CHANNELS, config, createRedis, logger } from '@whale/core';
 import type { FastifyInstance } from 'fastify';
 import { wsConnections } from './metrics.js';
 
@@ -34,6 +34,12 @@ export async function registerWebsocket(app: FastifyInstance): Promise<void> {
 
   app.get('/ws', { websocket: true }, (socket, req) => {
     const q = (req.query ?? {}) as Record<string, string>;
+    // Browsers can't set headers on the WS handshake, so the key rides the
+    // query string. Enforced only when API_KEYS is configured.
+    if (config.API_KEYS.length > 0 && !config.API_KEYS.includes(q.key ?? '')) {
+      socket.close(1008, 'unauthorized');
+      return;
+    }
     const requested = q.channels ? q.channels.split(',').map((s) => `ww:${s.trim()}`) : [];
     const client: Client = { send: (d) => socket.send(d), channels: new Set(requested) };
     clients.add(client);
