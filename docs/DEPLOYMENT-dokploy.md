@@ -11,18 +11,21 @@ deploy **one at a time**.
 
 ## Topology
 
-| Resource | Type | Dockerfile | Build arg | Public domain | Port |
+| Resource | Type | Dockerfile | Runtime env | Public domain | Port |
 |---|---|---|---|---|---|
 | Postgres 18 | Dokploy **Database** | — | — | no | 5432 (internal) |
 | Redis | Dokploy **Database** | — | — | no | 6379 (internal) |
 | `api` | **Application** | `docker/node.Dockerfile` | `APP=api` | ✅ `api.your-domain.com` | 4000 |
-| `web` | **Application** | `docker/web.Dockerfile` | see below | ✅ `app.your-domain.com` | 3000 |
+| `web` | **Application** | `docker/web.Dockerfile` | (build args, below) | ✅ `app.your-domain.com` | 3000 |
 | `engine` | **Application** | `docker/node.Dockerfile` | `APP=engine` | ❌ | — |
 | `collectors` | **Application** | `docker/node.Dockerfile` | `APP=collectors` | ❌ | — |
 | `bot` | **Application** | `docker/node.Dockerfile` | `APP=bot` | ❌ | — |
 
-`engine`, `collectors`, and `bot` are workers — **do not assign a domain or port**.
-Prometheus/Grafana are intentionally omitted; use Dokploy's built-in monitoring.
+All four node apps build the **same** `docker/node.Dockerfile` with **no build
+args** — the `APP` **environment variable** (Environment tab) selects which
+service each container runs. `engine`, `collectors`, and `bot` are workers — **do
+not assign a domain or port**. Prometheus/Grafana are intentionally omitted; use
+Dokploy's built-in monitoring.
 
 ## 0. Prep the VPS (strongly recommended)
 
@@ -52,16 +55,17 @@ Both stay on the private Docker network — no domains, no published ports.
 2. **Build Type → Dockerfile.**
    - Docker file path: `docker/node.Dockerfile`
    - Build context: `.` (repo root)
-   - **Build arg:** `APP=api`
+   - **No build args.**
 3. **Environment:** paste the COMMON + api blocks from
    [`.env.prod.example`](../.env.prod.example). Set `DATABASE_URL` / `REDIS_URL`
    to the Dokploy internal strings from step 1. Generate `API_KEYS` with
    `openssl rand -hex 32`. Set `API_CORS_ORIGIN=https://app.your-domain.com`.
-   **Include `RUN_MIGRATIONS=true`** — the container's entrypoint then applies
-   pending Prisma migrations on startup before booting the API (no custom run
-   command needed). `prisma` ships in the runtime image, and a migration failure
-   aborts startup so you never boot against a bad schema. Set this **only on api**
-   so migrations run from one service.
+   - **`APP=api`** — required; selects which service this container runs.
+   - **`RUN_MIGRATIONS=true`** — the entrypoint then applies pending Prisma
+     migrations on startup before booting (no custom run command needed). `prisma`
+     ships in the image, and a migration failure aborts startup so you never boot
+     against a bad schema. Set this **only on api** so migrations run from one
+     service.
 4. **Domain:** `api.your-domain.com` → container port **4000**, enable HTTPS.
 5. **Health check path:** `/health` (open, no key required).
 6. Deploy. Watch logs for `→ prisma migrate deploy` then `API listening`.
@@ -69,12 +73,12 @@ Both stay on the private Docker network — no domains, no published ports.
 ## 3. Create the worker apps: `engine`, `collectors`, `bot`
 
 For each: **Create → Application** → same repo → **Dockerfile**
-`docker/node.Dockerfile`, build context `.`, build arg `APP=engine` /
-`collectors` / `bot`.
+`docker/node.Dockerfile`, build context `.`, **no build args**.
 
-- **Environment:** COMMON block + the app's extra block from `.env.prod.example`
-  (bot needs the `TELEGRAM_*` vars; engine/collectors take `METRICS_PORT=9100`).
-  **Do not set `RUN_MIGRATIONS`** here — only api migrates.
+- **Environment:** COMMON block + the app's extra block from `.env.prod.example`.
+  Set **`APP=engine`**, **`APP=collectors`**, or **`APP=bot`** respectively
+  (required). bot needs the `TELEGRAM_*` vars; engine/collectors take
+  `METRICS_PORT=9100`. **Do not set `RUN_MIGRATIONS`** — only api migrates.
 - **No domain, no port** — these don't accept ingress.
 - Leave the default start command (the image's `CMD` runs the right service).
 - Deploy them **one at a time** (wait for each to go green before the next).
@@ -128,6 +132,12 @@ pnpm --filter @whale/db migrate:deploy
   stage is now named `production` in both Dockerfiles, so `--target production`
   resolves. If a Dokploy **Build Stage** field is set, use `production` or leave
   it blank. Make sure the fix is committed & pushed (Dokploy builds from Git).
+- **`No projects matched the filters` during build, then the container exits / is
+  "not found"** — this was the old build-arg approach (`APP` unset at build).
+  Fixed: the node image now builds all services and picks one via the `APP`
+  **environment variable**. Ensure each node app sets `APP` (api/engine/
+  collectors/bot) in its Environment; without it the container exits with
+  `set APP to api|engine|collectors|bot`.
 
 ## Troubleshooting OOM / crashes
 
@@ -143,7 +153,14 @@ pnpm --filter @whale/db migrate:deploy
 If even single builds OOM, stop building on the host: build images in CI and have
 Dokploy **pull** them. A ready-to-use, manually-triggered workflow is included at
 [`.github/workflows/images.yml`](../.github/workflows/images.yml) — run it
-(Actions → "Build & push images" → Run workflow). Then for each Application switch
-**Source → Docker Image**, e.g. `ghcr.io/alanwiz00/whale-watcher-api:latest`, add
-your GHCR credentials, and redeploy. Deploys become a `docker pull` with zero
+(Actions → "Build & push images" → Run workflow). It pushes two images:
+`whale-watcher-node` (api/engine/collectors/bot — one image, `APP` picks the
+service) and `whale-watcher-web`. Then for each Application switch **Source →
+Docker Image**:
+
+- api / engine / collectors / bot → `ghcr.io/alanwiz00/whale-watcher-node:latest`
+  (set the same `APP` env per app as above)
+- web → `ghcr.io/alanwiz00/whale-watcher-web:latest`
+
+Add your GHCR credentials and redeploy. Deploys become a `docker pull` with zero
 build load on the host.

@@ -49,8 +49,8 @@ services:
       retries: 5
 
   migrate:
-    build: { <<: *node-build, args: { APP: db } }
-    image: whalewatcher/db
+    build: *node-build
+    image: whalewatcher/node
     command: ["sh", "-c", "pnpm --filter @whale/db migrate:deploy"]
     env_file: .env
     environment: *service-env
@@ -59,12 +59,13 @@ services:
     restart: "no"
 
   collectors:
-    build: { <<: *node-build, args: { APP: collectors } }
-    image: whalewatcher/collectors
+    build: *node-build
+    image: whalewatcher/node
     restart: unless-stopped
     env_file: .env
     environment:
       <<: *service-env
+      APP: collectors
       METRICS_PORT: "9100"
     depends_on:
       redis: { condition: service_healthy }
@@ -73,12 +74,13 @@ services:
       - "9100:9100"
 
   engine:
-    build: { <<: *node-build, args: { APP: engine } }
-    image: whalewatcher/engine
+    build: *node-build
+    image: whalewatcher/node
     restart: unless-stopped
     env_file: .env
     environment:
       <<: *service-env
+      APP: engine
       METRICS_PORT: "9100"
     depends_on:
       postgres: { condition: service_healthy }
@@ -88,11 +90,13 @@ services:
       - "9101:9101"
 
   api:
-    build: { <<: *node-build, args: { APP: api } }
-    image: whalewatcher/api
+    build: *node-build
+    image: whalewatcher/node
     restart: unless-stopped
     env_file: .env
-    environment: *service-env
+    environment:
+      <<: *service-env
+      APP: api
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -106,11 +110,13 @@ services:
       retries: 5
 
   bot:
-    build: { <<: *node-build, args: { APP: bot } }
-    image: whalewatcher/bot
+    build: *node-build
+    image: whalewatcher/node
     restart: unless-stopped
     env_file: .env
-    environment: *service-env
+    environment:
+      <<: *service-env
+      APP: bot
     depends_on:
       redis: { condition: service_healthy }
       api: { condition: service_started }

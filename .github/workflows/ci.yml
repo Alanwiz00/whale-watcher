@@ -47,19 +47,24 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-test
     if: github.ref == 'refs/heads/main'
-    strategy:
-      matrix:
-        app: [collectors, engine, api, bot]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build ${{ matrix.app }} image
+      - name: Build node image (all services; APP selects one at runtime)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/node.Dockerfile
-          build-args: APP=${{ matrix.app }}
           push: false
-          tags: whalewatcher/${{ matrix.app }}:ci
+          tags: whalewatcher/node:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          push: false
+          tags: whalewatcher/web:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
