@@ -3,7 +3,7 @@ import { startMetricsServer } from './metrics.js';
 import { closeQueues } from './queues.js';
 import { registry } from './registry.js';
 import { registerSchedules } from './scheduler.js';
-import { runDiscovery, startCollectorWorker } from './worker.js';
+import { runDiscovery, runTrades, startCollectorWorker } from './worker.js';
 
 const log = logger.child({ svc: 'collectors' });
 
@@ -20,6 +20,10 @@ async function main(): Promise<void> {
 
   // Kick an immediate discovery so the registry is warm before the first tick.
   await runDiscovery().catch((err) => log.error({ err: String(err) }, 'initial discovery failed'));
+  // …then a first trades pass right away, so we don't wait a full TRADES_INTERVAL
+  // for any data (the repeatable tick only fires after the interval elapses).
+  // Backgrounded — boot shouldn't block on a multi-minute poll pass.
+  void runTrades().catch((err) => log.error({ err: String(err) }, 'initial trades pass failed'));
 
   const shutdown = async (sig: string) => {
     log.info({ sig }, 'shutting down collectors');

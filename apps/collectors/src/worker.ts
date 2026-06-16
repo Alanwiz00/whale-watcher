@@ -66,9 +66,15 @@ async function runTrades(): Promise<void> {
           let maxTs = m.lastTradeAt?.getTime() ?? 0;
           let enqueued = 0;
           for (const trade of trades) {
-            // Advance the cursor past EVERY trade (incl. dust) so we never
+            // Advance the cursor past EVERY trade (incl. skipped) so we never
             // re-fetch it; only enqueue ones worth processing.
             maxTs = Math.max(maxTs, trade.timestamp.getTime());
+            // Buys only — sells are exit/unwind noise (esp. on finished games).
+            if (!config.INGEST_SELLS && trade.side === 'sell') continue;
+            // Skip near-certainty trades — a finished game's winner sits at ~0.999
+            // and paying ~99¢ to win $1 isn't conviction signal. (Low-side buys
+            // are kept: those are longshot/underdog bets, which can be signal.)
+            if (trade.price >= config.MARKET_DECIDED_PRICE) continue;
             // Skip dust — sub-threshold trades can't be whales or meaningful split
             // legs, and a live match has thousands of them (queue flood / stalled
             // locks). One job per kept trade.
@@ -151,4 +157,4 @@ export function startCollectorWorker(): Worker {
   return worker;
 }
 
-export { runDiscovery };
+export { runDiscovery, runTrades };

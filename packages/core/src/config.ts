@@ -29,6 +29,12 @@ const csv = z
   .optional()
   .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []));
 
+const bool = (def: boolean) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v == null || v === '' ? def : /^(1|true|yes|on)$/i.test(v.trim())));
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -135,6 +141,15 @@ const schema = z.object({
   // meaningful split legs — one job each floods the queue (BullMQ stalled-lock
   // errors). The market cursor still advances past them, so they're skipped once.
   MIN_TRADE_USD: num(100),
+  // Ingest BUY trades only. Sells are mostly position-unwinding/exit noise (esp.
+  // dumping winning shares on a finished game), not fresh conviction — set true
+  // to track them again.
+  INGEST_SELLS: bool(false),
+  // Treat a market as decided/concluded once a trade prints at/above this price
+  // (or at/below 1 - this): a finished game sits at ~0.999, and trading there is
+  // noise, not signal. Such trades are dropped at ingestion and such markets are
+  // skipped at discovery. 1 = never skip on price.
+  MARKET_DECIDED_PRICE: num(0.98),
   /** Max concurrent venue HTTP requests. The Polymarket rate cap also bounds rate. */
   COLLECTOR_CONCURRENCY: num(5),
 

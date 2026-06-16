@@ -169,6 +169,17 @@ export class PolymarketCollector implements Collector {
             const tokenIds = parseJsonArray(m.clobTokenIds);
             const eventType = classifyEventType(title);
             const team = extractTeam(title);
+
+            // Skip CONCLUDED match markets — once a game ends, its winner sits at
+            // ~0.999, so an extreme price reliably means "game over". (We don't
+            // apply this to futures, where a ~0.99 side can just be a longshot
+            // team that's still alive, not a decided market.)
+            const isMatch =
+              eventType === 'match_result' ||
+              eventType === 'match_total_goals' ||
+              eventType === 'match_scorer';
+            const topPrice = Math.max(0, ...prices.filter(Number.isFinite));
+            if (isMatch && topPrice >= config.MARKET_DECIDED_PRICE) continue;
             const canonicalKey = buildCanonicalKey(eventType, team, title);
 
             const outcomes = outcomeNames.map((name, i) => ({
