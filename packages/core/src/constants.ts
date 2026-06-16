@@ -79,16 +79,64 @@ export const WC_2026_CONTEXT_TERMS = [
   'usa canada mexico',
 ] as const;
 
+// 2026 World Cup nations (+ common aliases). Used to extract teams from titles
+// and to build order-independent match canonical keys. Avoid 3-letter codes that
+// collide with English words (e.g. "can", "nor") so titles don't false-match.
 export const COUNTRY_ALIASES: Record<string, string[]> = {
+  // Hosts
+  usa: ['usa', 'united states', 'usmnt', 'u.s.a.'],
+  mexico: ['mexico', 'méxico', 'el tri'],
+  canada: ['canada', 'canucks'],
+  // South America
   brazil: ['brazil', 'brasil', 'bra', 'seleção'],
   argentina: ['argentina', 'arg', 'albiceleste'],
+  uruguay: ['uruguay', 'uru', 'la celeste'],
+  colombia: ['colombia', 'los cafeteros'],
+  ecuador: ['ecuador', 'la tri'],
+  paraguay: ['paraguay'],
+  // Europe
   france: ['france', 'fra', 'les bleus'],
   england: ['england', 'eng', 'three lions'],
   spain: ['spain', 'esp', 'la roja'],
   germany: ['germany', 'ger', 'die mannschaft'],
   portugal: ['portugal', 'por'],
   netherlands: ['netherlands', 'holland', 'ned', 'oranje'],
-  usa: ['usa', 'united states', 'usmnt', 'u.s.a.'],
+  belgium: ['belgium', 'red devils'],
+  croatia: ['croatia', 'cro'],
+  italy: ['italy', 'azzurri'],
+  switzerland: ['switzerland', 'swiss'],
+  denmark: ['denmark'],
+  norway: ['norway'],
+  austria: ['austria'],
+  poland: ['poland'],
+  serbia: ['serbia'],
+  czechia: ['czechia', 'czech republic'],
+  scotland: ['scotland'],
+  turkey: ['turkey', 'türkiye', 'turkiye'],
+  ukraine: ['ukraine'],
+  // Africa
+  morocco: ['morocco', 'atlas lions'],
+  senegal: ['senegal'],
+  egypt: ['egypt'],
+  algeria: ['algeria'],
+  tunisia: ['tunisia'],
+  nigeria: ['nigeria', 'super eagles'],
+  ghana: ['ghana'],
+  cameroon: ['cameroon'],
+  ivory_coast: ['ivory coast', "cote d'ivoire", 'côte d’ivoire'],
+  south_africa: ['south africa'],
+  dr_congo: ['dr congo', 'congo dr', 'democratic republic of congo'],
+  // Asia / Oceania
+  japan: ['japan', 'samurai blue'],
+  south_korea: ['south korea', 'korea republic'],
+  iran: ['iran', 'ir iran'],
+  saudi_arabia: ['saudi arabia', 'saudi', 'ksa'],
+  australia: ['australia', 'socceroos'],
+  qatar: ['qatar'],
+  iraq: ['iraq'],
+  uzbekistan: ['uzbekistan'],
+  jordan: ['jordan'],
+  new_zealand: ['new zealand'],
 };
 
 /** Whale classification tiers by 0–100 whale score. Order matters (desc). */

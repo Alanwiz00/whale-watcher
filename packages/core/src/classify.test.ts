@@ -18,6 +18,12 @@ describe('classifyEventType', () => {
     expect(classifyEventType('Brazil vs Argentina')).toBe('match_result');
     expect(classifyEventType('France to beat Morocco')).toBe('match_result');
   });
+  it('detects single-game winner markets (Polymarket per-match phrasing)', () => {
+    // The high-volume per-game markets and their event-title-prefixed form.
+    expect(classifyEventType('Will Belgium win on 2026-06-15?')).toBe('match_result');
+    expect(classifyEventType('Belgium vs. Egypt: Will Egypt win on 2026-06-15?')).toBe('match_result');
+    expect(classifyEventType('Will Belgium vs. Egypt end in a draw?')).toBe('match_result');
+  });
   it('detects per-match goal scorer', () => {
     expect(classifyEventType('Mbappé anytime goalscorer vs England')).toBe('match_scorer');
     expect(classifyEventType('Will Messi score a goal?')).toBe('match_scorer');

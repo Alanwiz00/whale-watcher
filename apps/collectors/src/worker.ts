@@ -64,17 +64,25 @@ async function runTrades(): Promise<void> {
           await jitter();
           const trades = await c.fetchTrades(m);
           let maxTs = m.lastTradeAt?.getTime() ?? 0;
+          let enqueued = 0;
           for (const trade of trades) {
+            // Advance the cursor past EVERY trade (incl. dust) so we never
+            // re-fetch it; only enqueue ones worth processing.
+            maxTs = Math.max(maxTs, trade.timestamp.getTime());
+            // Skip dust — sub-threshold trades can't be whales or meaningful split
+            // legs, and a live match has thousands of them (queue flood / stalled
+            // locks). One job per kept trade.
+            if ((trade.sizeUsd ?? 0) < config.MIN_TRADE_USD) continue;
             // Dedupe by a stable, colon-free job id so the same trade can't be
             // enqueued (and processed) twice. BullMQ ignores adds with an id that
             // already exists (incl. recently-completed), which removes the
             // concurrent-insert race in the engine. (jobIds can't contain ':'.)
             const jobId = `t-${trade.platform}-${trade.externalId}`.replace(/:/g, '-');
             await tradesQueue.add('trade', { trade }, { ...DEFAULT_JOB_OPTS, jobId });
-            maxTs = Math.max(maxTs, trade.timestamp.getTime());
+            enqueued++;
           }
           if (trades.length) {
-            tradesIngested.inc({ platform: m.platform }, trades.length);
+            if (enqueued) tradesIngested.inc({ platform: m.platform }, enqueued);
             registry.setCursor(m.platform, m.externalId, new Date(maxTs));
           }
         } catch (err) {
@@ -130,7 +138,11 @@ export function startCollectorWorker(): Worker {
           log.warn({ name: job.name }, 'unknown collect job');
       }
     },
-    { connection: config.redisConnection, concurrency: 3 },
+    // These are long batch jobs (a tick polls every active market), so the lock
+    // must outlast a full pass or BullMQ marks the tick stalled mid-run. Tune the
+    // *_INTERVAL_MS / COLLECTOR_CONCURRENCY / MIN_POLL_LIQUIDITY_USD knobs so a
+    // pass comfortably finishes within this window.
+    { connection: config.redisConnection, concurrency: 3, lockDuration: 10 * 60_000 },
   );
 
   worker.on('failed', (job, err) =>

@@ -57,7 +57,10 @@ export function startWorkers(): Worker[] {
     },
     // Concurrency is sized so the engine's total in-flight DB work stays well
     // under the Prisma connection pool (see DATABASE_URL connection_limit).
-    { connection, concurrency: 8 },
+    // lockDuration is raised above the 30s default so a job slowed by match-day
+    // DB contention isn't marked stalled mid-flight ("could not renew lock");
+    // MIN_TRADE_USD keeps volume down, this is the safety margin.
+    { connection, concurrency: 8, lockDuration: 60_000 },
   );
 
   const orderBooksWorker = new Worker<OrderBookJob>(
@@ -85,7 +88,7 @@ export function startWorkers(): Worker[] {
       });
       end();
     },
-    { connection, concurrency: 4 },
+    { connection, concurrency: 4, lockDuration: 60_000 },
   );
 
   const walletStatsWorker = new Worker<WalletStatsJob>(
@@ -95,7 +98,9 @@ export function startWorkers(): Worker[] {
       await withDbRetry(() => computeWalletStats(job.data.wallet));
       end();
     },
-    { connection, concurrency: 2 },
+    // computeWalletStats can run a snapshot lookup per market a wallet has traded,
+    // so a busy whale's job takes a while — raised lock so it isn't stalled.
+    { connection, concurrency: 2, lockDuration: 60_000 },
   );
 
   const scanWorker = new Worker(
@@ -112,7 +117,9 @@ export function startWorkers(): Worker[] {
           return withDbRetry(() => recomputeRanks());
       }
     },
-    { connection, concurrency: 1 },
+    // Global scans (arbitrage / anomaly / leaderboard ranks) sweep every market &
+    // wallet — minutes at tournament scale, so a generous lock avoids stalls.
+    { connection, concurrency: 1, lockDuration: 5 * 60_000 },
   );
 
   for (const w of [marketsWorker, tradesWorker, orderBooksWorker, walletStatsWorker, scanWorker]) {

@@ -79,12 +79,14 @@ const schema = z.object({
   TELEGRAM_MIN_ALERT_USD: num(0),
 
   POLYGON_RPC_URL: z.string().default('https://polygon-rpc.com'),
-  // Polymarket Gamma tag id(s) for the 2026 FIFA World Cup. Discovery pulls all
-  // markets under these tags (winner, group, match, scorer, props) — far more
-  // complete than a volume-ranked scan. 102350 = "2026 FIFA World Cup".
+  // Polymarket Gamma tag id(s) for the World Cup. Discovery reads the EVENTS
+  // under these tags (winner, groups, golden boot, props AND every individual
+  // game). 102232 = "fifa-world-cup" (the PARENT tag — the only place per-game
+  // markets like "Belgium vs. Egypt" live); 102350 = "2026-fifa-world-cup"
+  // (futures/props subset, kept as a defensive secondary).
   POLYMARKET_WC_TAG_IDS: z
     .string()
-    .default('102350')
+    .default('102232,102350')
     .transform((s) => s.split(',').map((x) => x.trim()).filter(Boolean)),
   KALSHI_API_BASE: z.string().default('https://api.elections.kalshi.com/trade-api/v2'),
   KALSHI_API_KEY_ID: z.string().optional().default(''),
@@ -112,13 +114,23 @@ const schema = z.object({
   // Comma-separated platforms to skip in the collector registry (e.g. "kalshi").
   DISABLED_PLATFORMS: csv,
 
+  // Poll cadence. Wide enough that one pass over the (thousands of) live-WC
+  // markets finishes within the interval; tighten only with a small market set.
   DISCOVERY_INTERVAL_MS: num(5 * 60_000),
-  TRADES_INTERVAL_MS: num(15_000),
-  ORDERBOOK_INTERVAL_MS: num(5_000),
-  /** Skip trade/orderbook polling for markets below this liquidity+volume (USD). */
-  MIN_POLL_LIQUIDITY_USD: num(50),
+  TRADES_INTERVAL_MS: num(120_000),
+  ORDERBOOK_INTERVAL_MS: num(120_000),
+  // Minimum combined volume + book liquidity (USD) for a market to be TRACKED
+  // (discovery) and polled for trades/order books. A live World Cup exposes ~10k
+  // Polymarket markets; this keeps the engine on the ones with real money so
+  // polling/DB don't get swamped. Real match + futures markets clear it easily.
+  MIN_POLL_LIQUIDITY_USD: num(1_000),
+  // Drop dust trades at ingestion: don't enqueue/persist trades below this USD
+  // size. A live match has thousands of sub-$100 trades that can't be whales or
+  // meaningful split legs — one job each floods the queue (BullMQ stalled-lock
+  // errors). The market cursor still advances past them, so they're skipped once.
+  MIN_TRADE_USD: num(100),
   /** Max concurrent venue HTTP requests (keeps us polite + avoids resets). */
-  COLLECTOR_CONCURRENCY: num(5),
+  COLLECTOR_CONCURRENCY: num(12),
 
   METRICS_PORT: num(9100),
 });

@@ -18,7 +18,10 @@ export function classifyEventType(title: string): EventType {
     return 'reach_stage';
   if (/total goals.*tournament|tournament.*total goals/.test(t)) return 'tournament_total_goals';
   if (/total goals|over\/under|o\/u|both teams to score|\bbtts\b/.test(t)) return 'match_total_goals';
-  if (/\bvs\b|\bv\.\b| v |to beat|to win\b|to defeat|match winner|\bdraw\b/.test(t)) return 'match_result';
+  // `win on 2026-06-15` / `win on june 15` = a single-game winner market (the
+  // Polymarket phrasing for per-match results), in addition to "X vs Y" / draw.
+  if (/\bvs\b|\bv\.\b| v |to beat|to win\b|to defeat|match winner|\bdraw\b|win on \d/.test(t))
+    return 'match_result';
   if (/most goals.*team|team.*most goals/.test(t)) return 'top_scorer_team';
   return 'other';
 }

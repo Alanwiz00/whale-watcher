@@ -39,6 +39,21 @@ interface GammaMarket {
   events?: Array<{ title?: string; slug?: string }>;
 }
 
+/**
+ * A Gamma `/events` entry. The World Cup is organized as events (the winner
+ * futures, each group, golden boot, props AND every individual game such as
+ * "Belgium vs. Egypt"), each grouping its child `markets`. We discover via
+ * events because the per-game markets live only here, and `/markets?tag_id=`
+ * proved unreliable (intermittently returns 0).
+ */
+interface GammaEvent {
+  id: string;
+  title?: string;
+  slug?: string;
+  closed?: boolean;
+  markets?: GammaMarket[];
+}
+
 interface DataApiTrade {
   proxyWallet?: string;
   side?: string; // BUY | SELL
@@ -84,74 +99,96 @@ export class PolymarketCollector implements Collector {
     const limit = 100; // Gamma caps page size at 100
     const seen = new Set<string>();
 
-    // Discover by the World Cup TAG (not global volume): Polymarket has ~800 WC
-    // markets — winner, group, match winner, advance, scorer, props — and the
-    // match/scorer ones are low-volume, so a volume-ranked scan misses them.
-    // The tag guarantees relevance, so no title filter is needed.
+    // Discover via the EVENTS endpoint under the World Cup tags. Polymarket groups
+    // the WC as events — winner futures, groups, golden boot, props AND every
+    // individual game ("Belgium vs. Egypt", whose markets like "Will Belgium win
+    // on 2026-06-15?" are the highest-volume of all). The fifa-world-cup parent
+    // tag (102232) is a superset of the year tag (102350) and is the ONLY place
+    // those per-game markets appear. We read events (not /markets?tag_id=, which
+    // intermittently returns 0) and walk each event's child markets.
     for (const tagId of config.POLYMARKET_WC_TAG_IDS) {
-      for (let offset = 0; offset < 3_000; offset += limit) {
-        let page: GammaMarket[] = [];
+      for (let offset = 0; offset < 5_000; offset += limit) {
+        let page: GammaEvent[] = [];
         try {
-          page = await fetchJson<GammaMarket[]>(`${GAMMA}/markets`, {
+          page = await fetchJson<GammaEvent[]>(`${GAMMA}/events`, {
             query: { closed: false, limit, offset, tag_id: tagId },
           });
         } catch (err) {
-          log.warn({ err: String(err), tagId, offset }, 'gamma page fetch failed');
+          log.warn({ err: String(err), tagId, offset }, 'gamma events page fetch failed');
           break;
         }
         if (!page.length) break;
 
-        for (const m of page) {
-          if (!m.conditionId || seen.has(m.conditionId)) continue;
-          seen.add(m.conditionId);
-          const title = m.question ?? m.slug ?? '';
-          if (!title) continue;
+        for (const ev of page) {
+          const eventTitle = ev.title ?? '';
+          const eventIsMatch = / vs\.? /i.test(eventTitle);
+          for (const m of ev.markets ?? []) {
+            if (!m.conditionId || seen.has(m.conditionId) || m.closed) continue;
+            seen.add(m.conditionId);
+            const question = m.question ?? m.slug ?? '';
+            if (!question) continue;
 
-          const outcomeNames = parseJsonArray(m.outcomes);
-        const prices = parseJsonArray(m.outcomePrices).map(Number);
-        const tokenIds = parseJsonArray(m.clobTokenIds);
-        const eventType = classifyEventType(title);
-        const team = extractTeam(title);
+            // A live World Cup exposes ~10k Polymarket markets; tracking every $0
+            // prop would swamp trade polling (and the DB). Skip dead markets at
+            // discovery — real match/futures markets clear this easily. Reuses the
+            // MIN_POLL_LIQUIDITY_USD knob (combined volume + book liquidity).
+            const volumeUsd = num(m.volumeNum ?? m.volume);
+            const liquidityUsd = num(m.liquidityNum ?? m.liquidity);
+            if ((volumeUsd ?? 0) + (liquidityUsd ?? 0) < config.MIN_POLL_LIQUIDITY_USD) continue;
 
-        const outcomes = outcomeNames.map((name, i) => ({
-          name,
-          externalId: tokenIds[i] ?? null,
-          impliedProb: Number.isFinite(prices[i]) ? prices[i]! : null,
-          lastPrice: Number.isFinite(prices[i]) ? prices[i]! : null,
-        }));
+            // Per-game market questions ("Will Belgium win on 2026-06-15?") omit
+            // the opponent; prefix the event matchup so classification + the
+            // canonical key see both teams and group the game's markets together.
+            const title =
+              eventIsMatch && !/ vs\.? /i.test(question) ? `${eventTitle}: ${question}` : question;
 
-        markets.push({
-          platform: this.platform,
-          externalId: m.conditionId,
-          title,
-          eventType,
-          team,
-          canonicalKey: buildCanonicalKey(eventType, team, title),
-          startTime: m.startDate ? new Date(m.startDate) : null,
-          closeTime: m.endDate ? new Date(m.endDate) : null,
-          status: m.closed ? 'closed' : 'open',
-          volumeUsd: num(m.volumeNum ?? m.volume),
-          liquidityUsd: num(m.liquidityNum ?? m.liquidity),
-          outcomes,
-        });
+            const outcomeNames = parseJsonArray(m.outcomes);
+            const prices = parseJsonArray(m.outcomePrices).map(Number);
+            const tokenIds = parseJsonArray(m.clobTokenIds);
+            const eventType = classifyEventType(title);
+            const team = extractTeam(title);
+            const canonicalKey = buildCanonicalKey(eventType, team, title);
 
-        tracked.push({
-          platform: this.platform,
-          externalId: m.conditionId,
-          title,
-          canonicalKey: buildCanonicalKey(eventType, team, title),
-          meta: { conditionId: m.conditionId, tokenIds },
-          liquidityUsd: num(m.liquidityNum ?? m.liquidity),
-          volumeUsd: num(m.volumeNum ?? m.volume),
-          outcomes: outcomes.map((o) => ({ name: o.name, externalId: o.externalId })),
-        });
-      }
+            const outcomes = outcomeNames.map((name, i) => ({
+              name,
+              externalId: tokenIds[i] ?? null,
+              impliedProb: Number.isFinite(prices[i]) ? prices[i]! : null,
+              lastPrice: Number.isFinite(prices[i]) ? prices[i]! : null,
+            }));
+
+            markets.push({
+              platform: this.platform,
+              externalId: m.conditionId,
+              title,
+              eventType,
+              team,
+              canonicalKey,
+              startTime: m.startDate ? new Date(m.startDate) : null,
+              closeTime: m.endDate ? new Date(m.endDate) : null,
+              status: m.closed ? 'closed' : 'open',
+              volumeUsd,
+              liquidityUsd,
+              outcomes,
+            });
+
+            tracked.push({
+              platform: this.platform,
+              externalId: m.conditionId,
+              title,
+              canonicalKey,
+              meta: { conditionId: m.conditionId, tokenIds },
+              liquidityUsd,
+              volumeUsd,
+              outcomes: outcomes.map((o) => ({ name: o.name, externalId: o.externalId })),
+            });
+          }
+        }
 
         if (page.length < limit) break;
       }
     }
 
-    log.info({ count: markets.length }, 'discovered polymarket WC markets');
+    log.info({ count: markets.length }, 'discovered polymarket WC markets (via events)');
     return { markets, tracked };
   }
 
