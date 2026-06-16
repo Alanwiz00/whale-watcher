@@ -4,6 +4,12 @@ import { SUBS_KEY } from './bot.js';
 
 const log = logger.child({ svc: 'bot', mod: 'alerts' });
 
+/**
+ * Alert types delivered ONLY to /live subscribers, never the default broadcast
+ * chats. Steam moves are lower-confidence/noisier, so they're opt-in via /live.
+ */
+const LIVE_ONLY_TYPES = new Set<AlertPayload['type']>(['steam_move']);
+
 const EMOJI: Record<string, string> = {
   whale_trade: '🐋',
   split_accumulation: '🧩',
@@ -44,7 +50,10 @@ export async function startAlertsSubscriber(bot: Telegraf): Promise<void> {
     const targets = new Set<string>();
     // Default broadcast chats get medium+ severity (low = e.g. small "Normal"
     // whales, which would be too chatty). /live chats get everything.
-    if (alert.severity !== 'low') {
+    // Steam moves are lower-confidence/noisier, so they're firehose-only: never
+    // broadcast — delivered solely to chats that opted in via /live.
+    const liveOnly = LIVE_ONLY_TYPES.has(alert.type);
+    if (!liveOnly && alert.severity !== 'low') {
       for (const id of config.TELEGRAM_ALERT_CHAT_ID) targets.add(id);
     }
     const subs = await redis().smembers(SUBS_KEY);

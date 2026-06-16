@@ -150,6 +150,11 @@ const schema = z.object({
   // noise, not signal. Such trades are dropped at ingestion and such markets are
   // skipped at discovery. 1 = never skip on price.
   MARKET_DECIDED_PRICE: num(0.98),
+  // Max trade look-back (ms). A poll never fetches trades older than this, so a
+  // fresh market (no cursor) or a stale cursor after downtime starts from recent
+  // LIVE activity instead of replaying a likely-missed window of old trades. Must
+  // exceed TRADES_INTERVAL_MS so steady-state polling never clips. Default 10 min.
+  MAX_TRADE_LOOKBACK_MS: num(10 * 60_000),
   /** Max concurrent venue HTTP requests. The Polymarket rate cap also bounds rate. */
   COLLECTOR_CONCURRENCY: num(5),
 

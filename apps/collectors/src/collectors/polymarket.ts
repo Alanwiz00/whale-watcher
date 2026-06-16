@@ -17,6 +17,10 @@ const GAMMA = 'https://gamma-api.polymarket.com';
 const DATA_API = 'https://data-api.polymarket.com';
 const CLOB = 'https://clob.polymarket.com';
 
+/** Safety cap on trade pagination per market per poll (10 × 500 = 5k trades).
+ *  Prevents a stale/old cursor from triggering a runaway back-fill. */
+const MAX_TRADE_PAGES = 10;
+
 /**
  * Hard rate cap for ALL Polymarket requests: serialize them to ≥
  * POLYMARKET_MIN_REQUEST_MS apart so a poll pass over hundreds of markets stays
@@ -227,38 +231,58 @@ export class PolymarketCollector implements Collector {
 
   async fetchTrades(market: TrackedMarket): Promise<NormalizedTrade[]> {
     const conditionId = String(market.meta.conditionId ?? market.externalId);
-    const sinceMs = market.lastTradeAt?.getTime() ?? 0;
+    const limit = 500; // data-api page size
+    // Floor the cursor at the look-back window: a fresh market (no cursor) or a
+    // stale cursor after downtime starts from recent LIVE activity, never deep
+    // back-filling a likely-missed window of old trades.
+    const lookbackFloor = Date.now() - config.MAX_TRADE_LOOKBACK_MS;
+    const sinceMs = Math.max(market.lastTradeAt?.getTime() ?? 0, lookbackFloor);
 
-    const raw = await pmFetch<DataApiTrade[]>(`${DATA_API}/trades`, {
-      query: { market: conditionId, limit: 500, offset: 0, takerOnly: false },
-    }).catch((err) => {
-      log.warn({ err: String(err), conditionId }, 'trade fetch failed');
-      return [] as DataApiTrade[];
-    });
-
+    // The data-api returns trades newest-first with no "since" param (page caps
+    // at 500). Page back until we reach `sinceMs`, a short/empty page, or the
+    // safety cap — so a live burst of >500 trades in one interval isn't truncated,
+    // while the look-back floor bounds it to recent activity. Pages are
+    // rate-limited via pmFetch.
     const out: NormalizedTrade[] = [];
-    for (const t of raw) {
-      const tsMs = (t.timestamp ?? 0) * 1000;
-      if (tsMs <= sinceMs) continue;
-      const price = num(t.price);
-      const size = num(t.size);
-      if (price == null || size == null) continue;
-      const sizeUsd = size * price; // shares × prob ≈ USDC notional
-      const externalId = `${t.transactionHash ?? 'tx'}:${t.asset ?? '0'}:${t.proxyWallet ?? '0'}:${tsMs}`;
-
-      out.push({
-        platform: this.platform,
-        externalId,
-        marketExternalId: conditionId,
-        outcomeName: t.outcome ?? null,
-        wallet: t.proxyWallet ?? null,
-        side: (t.side ?? 'BUY').toLowerCase() === 'sell' ? 'sell' : 'buy',
-        price,
-        size,
-        sizeUsd,
-        timestamp: new Date(tsMs),
-        raw: t,
+    for (let page = 0; page < MAX_TRADE_PAGES; page++) {
+      const raw = await pmFetch<DataApiTrade[]>(`${DATA_API}/trades`, {
+        query: { market: conditionId, limit, offset: page * limit, takerOnly: false },
+      }).catch((err) => {
+        log.warn({ err: String(err), conditionId, page }, 'trade fetch failed');
+        return null;
       });
+      if (!raw || raw.length === 0) break;
+
+      let reachedCursor = false;
+      for (const t of raw) {
+        const tsMs = (t.timestamp ?? 0) * 1000;
+        // Newest-first: the first trade at/older than the cursor means everything
+        // after it is too — we've caught up.
+        if (tsMs <= sinceMs) {
+          reachedCursor = true;
+          break;
+        }
+        const price = num(t.price);
+        const size = num(t.size);
+        if (price == null || size == null) continue;
+        const sizeUsd = size * price; // shares × prob ≈ USDC notional
+        const externalId = `${t.transactionHash ?? 'tx'}:${t.asset ?? '0'}:${t.proxyWallet ?? '0'}:${tsMs}`;
+
+        out.push({
+          platform: this.platform,
+          externalId,
+          marketExternalId: conditionId,
+          outcomeName: t.outcome ?? null,
+          wallet: t.proxyWallet ?? null,
+          side: (t.side ?? 'BUY').toLowerCase() === 'sell' ? 'sell' : 'buy',
+          price,
+          size,
+          sizeUsd,
+          timestamp: new Date(tsMs),
+          raw: t,
+        });
+      }
+      if (reachedCursor || raw.length < limit) break;
     }
     return out;
   }
