@@ -128,6 +128,33 @@ function timer(stage: Stage): () => void {
   return () => collectDuration.set({ stage }, (Date.now() - start) / 1000);
 }
 
+/**
+ * Single-flight guard: if a pass of this stage is still running when the next is
+ * triggered (a slow rate-limited pass over many markets, or the startup tick
+ * overlapping the first scheduled tick), skip the new one instead of running it
+ * concurrently. Overlapping passes share the request budget and pile up, which
+ * stalls forward progress — better to drop a tick and catch up next interval.
+ */
+function singleFlight(stage: Stage, fn: () => Promise<void>): () => Promise<void> {
+  let active = false;
+  return async () => {
+    if (active) {
+      log.warn({ stage }, 'previous pass still running — skipping this tick');
+      return;
+    }
+    active = true;
+    try {
+      await fn();
+    } finally {
+      active = false;
+    }
+  };
+}
+
+const discoveryPass = singleFlight('discovery', runDiscovery);
+const tradesPass = singleFlight('trades', runTrades);
+const orderBooksPass = singleFlight('orderbooks', runOrderBooks);
+
 /** Start the worker that executes scheduled collection ticks. */
 export function startCollectorWorker(): Worker {
   const worker = new Worker(
@@ -135,11 +162,11 @@ export function startCollectorWorker(): Worker {
     async (job) => {
       switch (job.name as Stage) {
         case 'discovery':
-          return runDiscovery();
+          return discoveryPass();
         case 'trades':
-          return runTrades();
+          return tradesPass();
         case 'orderbooks':
-          return runOrderBooks();
+          return orderBooksPass();
         default:
           log.warn({ name: job.name }, 'unknown collect job');
       }
@@ -157,4 +184,6 @@ export function startCollectorWorker(): Worker {
   return worker;
 }
 
-export { runDiscovery, runTrades };
+// Guarded variants for the startup kicks in index.ts, so an immediate pass and
+// the first scheduled tick can't run concurrently.
+export { discoveryPass as runDiscovery, tradesPass as runTrades };

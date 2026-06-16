@@ -8,9 +8,9 @@
  * markets, breaks them down by event type, lists the biggest match markets, then
  * fetches recent trades for the highest-volume one.
  */
+import { config } from '@whale/core';
 import { PolymarketCollector } from './collectors/polymarket.js';
 
-const MATCH_TYPES = new Set(['match_result', 'match_scorer', 'match_total_goals']);
 const fmt = (n: unknown) => `$${Math.round(Number(n) || 0).toLocaleString('en-US')}`;
 
 async function main(): Promise<void> {
@@ -22,32 +22,61 @@ async function main(): Promise<void> {
 
   console.log(`\nDiscovered ${markets.length} Polymarket WC markets`);
   console.log('By event type:', byType);
-
-  const matches = markets
-    .filter((m) => MATCH_TYPES.has(m.eventType))
-    .sort((a, b) => (Number(b.volumeUsd) || 0) - (Number(a.volumeUsd) || 0));
-  console.log(`\nMatch markets: ${matches.length}`);
-  for (const m of matches.slice(0, 12)) {
-    console.log(`  • ${fmt(m.volumeUsd)}  ${m.title}  [${m.eventType}]  ${m.canonicalKey}`);
-  }
-
-  const top = matches[0];
-  if (!top) {
-    console.log('\n❌ No match markets discovered — check POLYMARKET_WC_TAG_IDS.');
-    process.exit(1);
-  }
-  const tr = tracked.find((t) => t.externalId === top.externalId)!;
-  const trades = await c.fetchTrades(tr);
-  console.log(`\nTrades for "${top.title}" (${fmt(top.volumeUsd)} vol): ${trades.length}`);
-  for (const t of trades.slice(0, 6)) {
-    console.log(`  • ${t.side.toUpperCase()} ${t.outcomeName ?? '?'}  ${fmt(t.sizeUsd)} @ ${(t.price * 100).toFixed(1)}%`);
-  }
-
   console.log(
-    matches.length > 0 && trades.length >= 0
-      ? '\n✅ Match markets are discovered and tradable.'
-      : '\n❌ Something is off.',
+    `Filters: MIN_TRADE_USD=${config.MIN_TRADE_USD} INGEST_SELLS=${config.INGEST_SELLS} ` +
+      `MARKET_DECIDED_PRICE=${config.MARKET_DECIDED_PRICE} ` +
+      `MAX_TRADE_LOOKBACK_MS=${config.MAX_TRADE_LOOKBACK_MS} TRADES_INTERVAL_MS=${config.TRADES_INTERVAL_MS}`,
   );
+
+  // Walk the busiest tracked markets and run the exact worker filter chain, so we
+  // can see how many trades would actually be ENQUEUED (and where the rest go).
+  const byVol = [...tracked].sort((a, b) => (Number(b.volumeUsd) || 0) - (Number(a.volumeUsd) || 0));
+  const sample = byVol.slice(0, 25);
+  let total = 0;
+  let sells = 0;
+  let decided = 0;
+  let dust = 0;
+  let kept = 0;
+  const keptExamples: string[] = [];
+  for (const m of sample) {
+    const trades = await c.fetchTrades(m); // already floored to the look-back window
+    for (const t of trades) {
+      total++;
+      if (!config.INGEST_SELLS && t.side === 'sell') {
+        sells++;
+        continue;
+      }
+      if (t.price >= config.MARKET_DECIDED_PRICE) {
+        decided++;
+        continue;
+      }
+      if ((t.sizeUsd ?? 0) < config.MIN_TRADE_USD) {
+        dust++;
+        continue;
+      }
+      kept++;
+      if (keptExamples.length < 8) {
+        keptExamples.push(`${t.side.toUpperCase()} ${fmt(t.sizeUsd)} @ ${(t.price * 100).toFixed(1)}%  ${m.title}`);
+      }
+    }
+  }
+
+  console.log(`\nTrade funnel over top ${sample.length} markets (last look-back window):`);
+  console.log(`  fetched:        ${total}`);
+  console.log(`  dropped sell:   ${sells}`);
+  console.log(`  dropped decided:${decided}  (price ≥ ${config.MARKET_DECIDED_PRICE})`);
+  console.log(`  dropped dust:   ${dust}  (< $${config.MIN_TRADE_USD})`);
+  console.log(`  ENQUEUED:       ${kept}`);
+  for (const e of keptExamples) console.log(`    • ${e}`);
+
+  if (total === 0) {
+    console.log('\n⚠️  No trades fetched at all — likely no live activity in the look-back window,');
+    console.log('    or MAX_TRADE_LOOKBACK_MS ≤ TRADES_INTERVAL_MS (trades fall in the poll gap).');
+  } else if (kept === 0) {
+    console.log('\n⚠️  Trades fetched but all filtered out — loosen MIN_TRADE_USD / INGEST_SELLS / MARKET_DECIDED_PRICE.');
+  } else {
+    console.log(`\n✅ ${kept} trades would be enqueued — ingestion is working.`);
+  }
   process.exit(0);
 }
 

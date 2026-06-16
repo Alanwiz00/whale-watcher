@@ -234,9 +234,16 @@ export class PolymarketCollector implements Collector {
     const limit = 500; // data-api page size
     // Floor the cursor at the look-back window: a fresh market (no cursor) or a
     // stale cursor after downtime starts from recent LIVE activity, never deep
-    // back-filling a likely-missed window of old trades.
-    const lookbackFloor = Date.now() - config.MAX_TRADE_LOOKBACK_MS;
-    const sinceMs = Math.max(market.lastTradeAt?.getTime() ?? 0, lookbackFloor);
+    // back-filling a likely-missed window of old trades. The window MUST exceed
+    // the poll interval, else trades land in the gap between polls and are never
+    // fetched — so we floor it at 2× TRADES_INTERVAL regardless of config.
+    const cursor = market.lastTradeAt?.getTime() ?? 0;
+    const lookbackMs = Math.max(config.MAX_TRADE_LOOKBACK_MS, config.TRADES_INTERVAL_MS * 2);
+    const sinceMs = Math.max(cursor, Date.now() - lookbackMs);
+    // Fresh market (no cursor): take ONLY the latest page — a cold start must not
+    // deep back-fill every market at once (that's the slow startup pass that
+    // stalls forward progress). Once a cursor exists, page back to close gaps.
+    const maxPages = cursor > 0 ? MAX_TRADE_PAGES : 1;
 
     // The data-api returns trades newest-first with no "since" param (page caps
     // at 500). Page back until we reach `sinceMs`, a short/empty page, or the
@@ -244,7 +251,7 @@ export class PolymarketCollector implements Collector {
     // while the look-back floor bounds it to recent activity. Pages are
     // rate-limited via pmFetch.
     const out: NormalizedTrade[] = [];
-    for (let page = 0; page < MAX_TRADE_PAGES; page++) {
+    for (let page = 0; page < maxPages; page++) {
       const raw = await pmFetch<DataApiTrade[]>(`${DATA_API}/trades`, {
         query: { market: conditionId, limit, offset: page * limit, takerOnly: false },
       }).catch((err) => {
