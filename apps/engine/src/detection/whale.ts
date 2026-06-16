@@ -86,6 +86,8 @@ export async function detectWhale(trade: NormalizedTrade, persisted: PersistedTr
       body: formatWhaleAlert({
         platform: trade.platform,
         market: market?.title ?? trade.marketExternalId,
+        trader: trade.trader ?? null,
+        wallet: trade.wallet ?? null,
         side: trade.side,
         outcome: trade.outcomeName ?? null,
         entryPrice: trade.price,
@@ -101,6 +103,7 @@ export async function detectWhale(trade: NormalizedTrade, persisted: PersistedTr
       data: {
         tradeExternalId: trade.externalId,
         wallet: trade.wallet,
+        trader: trade.trader,
         side: trade.side,
         outcome: trade.outcomeName,
         entryPrice: trade.price,
@@ -143,6 +146,8 @@ function timingScore(trade: NormalizedTrade): number {
 function formatWhaleAlert(a: {
   platform: string;
   market: string;
+  trader: string | null;
+  wallet: string | null;
   side: string;
   outcome: string | null;
   entryPrice: number;
@@ -166,6 +171,12 @@ function formatWhaleAlert(a: {
   const isBuy = a.side.toLowerCase() !== 'sell';
   const action = `${isBuy ? '🟢 BUY' : '🔴 SELL'} ${a.outcome ?? ''}`.trim();
 
+  // Trader display name (Polymarket exposes one), with the short wallet for
+  // verification; fall back to the short wallet alone when there's no name.
+  const shortWallet =
+    a.wallet && a.wallet.length > 10 ? `${a.wallet.slice(0, 5)}…${a.wallet.slice(-5)}` : a.wallet;
+  const trader = a.trader ? (shortWallet ? `${a.trader} (${shortWallet})` : a.trader) : (shortWallet ?? 'unknown');
+
   // BUY → payout if it wins (+profit · multiple); SELL → estimated realized PnL.
   let outcomeLine: string;
   if (isBuy) {
@@ -184,6 +195,7 @@ function formatWhaleAlert(a: {
   return [
     `Platform: ${a.platform}`,
     `Market: ${a.market}`,
+    `Trader: ${trader}`,
     `Action: ${action} @ ${pct(a.entryPrice)}`,
     `Size: ${usd(a.sizeUsd)}`,
     outcomeLine,

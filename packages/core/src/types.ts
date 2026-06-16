@@ -52,6 +52,8 @@ export interface NormalizedTrade {
   outcomeName?: string | null;
   /** Stable wallet/user id where available; null for odds-only venues. */
   wallet?: string | null;
+  /** Human-readable trader display name where the venue exposes one. */
+  trader?: string | null;
   side: TradeSide;
   /** Implied probability in [0,1] at which the trade executed. */
   price: number;

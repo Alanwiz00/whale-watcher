@@ -82,6 +82,8 @@ interface GammaEvent {
 
 interface DataApiTrade {
   proxyWallet?: string;
+  name?: string; // trader display name (e.g. "MegaScout5180")
+  pseudonym?: string; // auto-generated handle (e.g. "Dapper-Imagination")
   side?: string; // BUY | SELL
   size?: number;
   price?: number;
@@ -281,6 +283,7 @@ export class PolymarketCollector implements Collector {
           marketExternalId: conditionId,
           outcomeName: t.outcome ?? null,
           wallet: t.proxyWallet ?? null,
+          trader: t.name ?? t.pseudonym ?? null,
           side: (t.side ?? 'BUY').toLowerCase() === 'sell' ? 'sell' : 'buy',
           price,
           size,

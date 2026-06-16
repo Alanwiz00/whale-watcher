@@ -54,6 +54,25 @@ export async function emitAlert(
   if (channel !== CHANNELS.alerts) await redis().publish(CHANNELS.alerts, message);
 
   alertsEmitted.inc({ type: payload.type, severity: payload.severity });
-  log.info({ type: payload.type, severity: payload.severity, title: payload.title }, 'alert emitted');
+  // Log the key structured fields so each line is actionable (pino drops the
+  // undefined ones per alert type). The full human-readable text is `payload.body`.
+  const d = (payload.data ?? {}) as Record<string, unknown>;
+  log.info(
+    {
+      type: payload.type,
+      severity: payload.severity,
+      platform: payload.platform,
+      title: payload.title,
+      market: d.marketTitle,
+      trader: d.trader,
+      outcome: d.outcome,
+      side: d.side,
+      usd: d.sizeUsd ?? d.aggregateUsd ?? d.latestUsd,
+      price: d.entryPrice ?? d.currentProb ?? d.toProb,
+      score: d.score,
+      wallet: d.wallet,
+    },
+    'alert emitted',
+  );
   return true;
 }
