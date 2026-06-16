@@ -88,6 +88,10 @@ const schema = z.object({
     .string()
     .default('102232,102350')
     .transform((s) => s.split(',').map((x) => x.trim()).filter(Boolean)),
+  // Minimum spacing (ms) between Polymarket HTTP requests — a hard rate cap that
+  // holds regardless of COLLECTOR_CONCURRENCY, so a big poll pass doesn't trip
+  // data-api 429s. 150ms ≈ 6.6 req/s. Raise if you still see 429; 0 disables.
+  POLYMARKET_MIN_REQUEST_MS: num(150),
   KALSHI_API_BASE: z.string().default('https://api.elections.kalshi.com/trade-api/v2'),
   KALSHI_API_KEY_ID: z.string().optional().default(''),
   KALSHI_PRIVATE_KEY_PATH: z.string().optional().default(''),
@@ -114,23 +118,25 @@ const schema = z.object({
   // Comma-separated platforms to skip in the collector registry (e.g. "kalshi").
   DISABLED_PLATFORMS: csv,
 
-  // Poll cadence. Wide enough that one pass over the (thousands of) live-WC
-  // markets finishes within the interval; tighten only with a small market set.
+  // Poll cadence. With the rate cap (POLYMARKET_MIN_REQUEST_MS) one pass takes
+  // ≈ markets / (1000/cap) seconds, so intervals must exceed that. At ~6.6 req/s
+  // these fit ≲ 800 polled markets (MIN_POLL_LIQUIDITY_USD ≥ $50k). Order books
+  // are 2 reqs/market, hence the wider interval.
   DISCOVERY_INTERVAL_MS: num(5 * 60_000),
-  TRADES_INTERVAL_MS: num(120_000),
-  ORDERBOOK_INTERVAL_MS: num(120_000),
+  TRADES_INTERVAL_MS: num(180_000),
+  ORDERBOOK_INTERVAL_MS: num(300_000),
   // Minimum combined volume + book liquidity (USD) for a market to be TRACKED
-  // (discovery) and polled for trades/order books. A live World Cup exposes ~10k
-  // Polymarket markets; this keeps the engine on the ones with real money so
-  // polling/DB don't get swamped. Real match + futures markets clear it easily.
-  MIN_POLL_LIQUIDITY_USD: num(1_000),
+  // (discovery) and polled. A live World Cup exposes ~10k Polymarket markets;
+  // this keeps the engine (and the venue rate budget) on the ones with real
+  // money. Match games are $100k–$28M, so they always clear. ≥$50k ≈ 800 markets.
+  MIN_POLL_LIQUIDITY_USD: num(25_000),
   // Drop dust trades at ingestion: don't enqueue/persist trades below this USD
   // size. A live match has thousands of sub-$100 trades that can't be whales or
   // meaningful split legs — one job each floods the queue (BullMQ stalled-lock
   // errors). The market cursor still advances past them, so they're skipped once.
   MIN_TRADE_USD: num(100),
-  /** Max concurrent venue HTTP requests (keeps us polite + avoids resets). */
-  COLLECTOR_CONCURRENCY: num(12),
+  /** Max concurrent venue HTTP requests. The Polymarket rate cap also bounds rate. */
+  COLLECTOR_CONCURRENCY: num(5),
 
   METRICS_PORT: num(9100),
 });

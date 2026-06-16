@@ -8,7 +8,7 @@ import {
   type NormalizedOrderBook,
   type NormalizedTrade,
 } from '@whale/core';
-import { fetchJson } from '../http.js';
+import { fetchJson, type FetchJsonOpts } from '../http.js';
 import type { Collector, TrackedMarket } from './base.js';
 
 const log = logger.child({ svc: 'collectors', platform: 'polymarket' });
@@ -16,6 +16,28 @@ const log = logger.child({ svc: 'collectors', platform: 'polymarket' });
 const GAMMA = 'https://gamma-api.polymarket.com';
 const DATA_API = 'https://data-api.polymarket.com';
 const CLOB = 'https://clob.polymarket.com';
+
+/**
+ * Hard rate cap for ALL Polymarket requests: serialize them to ≥
+ * POLYMARKET_MIN_REQUEST_MS apart so a poll pass over hundreds of markets stays
+ * under data-api's limit no matter how many fetches COLLECTOR_CONCURRENCY runs
+ * in parallel (they queue at the gate). This is what stops the HTTP 429s.
+ */
+const minGap = config.POLYMARKET_MIN_REQUEST_MS;
+let nextSlot = 0;
+async function gate(): Promise<void> {
+  if (minGap <= 0) return;
+  const now = Date.now();
+  const wait = nextSlot - now;
+  nextSlot = (wait > 0 ? nextSlot : now) + minGap;
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
+/** Rate-limited Polymarket JSON fetch. */
+async function pmFetch<T>(url: string, opts?: FetchJsonOpts): Promise<T> {
+  await gate();
+  return fetchJson<T>(url, opts);
+}
 
 /** Subset of the Gamma `/markets` payload we rely on. Fields are best-effort. */
 interface GammaMarket {
@@ -110,7 +132,7 @@ export class PolymarketCollector implements Collector {
       for (let offset = 0; offset < 5_000; offset += limit) {
         let page: GammaEvent[] = [];
         try {
-          page = await fetchJson<GammaEvent[]>(`${GAMMA}/events`, {
+          page = await pmFetch<GammaEvent[]>(`${GAMMA}/events`, {
             query: { closed: false, limit, offset, tag_id: tagId },
           });
         } catch (err) {
@@ -196,7 +218,7 @@ export class PolymarketCollector implements Collector {
     const conditionId = String(market.meta.conditionId ?? market.externalId);
     const sinceMs = market.lastTradeAt?.getTime() ?? 0;
 
-    const raw = await fetchJson<DataApiTrade[]>(`${DATA_API}/trades`, {
+    const raw = await pmFetch<DataApiTrade[]>(`${DATA_API}/trades`, {
       query: { market: conditionId, limit: 500, offset: 0, takerOnly: false },
     }).catch((err) => {
       log.warn({ err: String(err), conditionId }, 'trade fetch failed');
@@ -235,7 +257,7 @@ export class PolymarketCollector implements Collector {
     const books: NormalizedOrderBook[] = [];
 
     for (const tokenId of tokenIds.slice(0, 2)) {
-      const book = await fetchJson<ClobBook>(`${CLOB}/book`, { query: { token_id: tokenId } }).catch(
+      const book = await pmFetch<ClobBook>(`${CLOB}/book`, { query: { token_id: tokenId } }).catch(
         () => null,
       );
       if (!book) continue;

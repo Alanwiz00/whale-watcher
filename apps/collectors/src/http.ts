@@ -24,7 +24,7 @@ class HttpError extends Error {
  * and 429/5xx awareness. Returns parsed JSON typed as T.
  */
 export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promise<T> {
-  const { timeoutMs = 12_000, retries = 3, headers = {}, query } = opts;
+  const { timeoutMs = 12_000, retries = 5, headers = {}, query } = opts;
   const full = query ? `${url}${url.includes('?') ? '&' : '?'}${qs(query)}` : url;
 
   let attempt = 0;
