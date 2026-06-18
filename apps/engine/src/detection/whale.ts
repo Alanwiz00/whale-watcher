@@ -3,6 +3,7 @@ import {
   computeWhaleScore,
   config,
   quant,
+  traderProfileUrl,
   type AlertSeverity,
   type NormalizedTrade,
 } from '@whale/core';
@@ -77,17 +78,29 @@ export async function detectWhale(trade: NormalizedTrade, persisted: PersistedTr
   const payoutIfWin = isBuy && trade.price > 0 ? trade.sizeUsd / trade.price : null;
   const sellPnl = !isBuy ? await estimateSellPnl(trade, persisted) : null;
 
+  // High-conviction tier: a big asymmetric BUY — large potential payout bought
+  // cheap (high upside). Always alerted at CRITICAL and pinged to Telegram.
+  const profitPct =
+    payoutIfWin != null && trade.sizeUsd > 0 ? (payoutIfWin - trade.sizeUsd) / trade.sizeUsd : null;
+  const bigUpside =
+    payoutIfWin != null &&
+    payoutIfWin >= config.WHALE_BIG_PAYOUT_USD &&
+    profitPct != null &&
+    profitPct >= config.WHALE_BIG_PROFIT_PCT;
+  const profileUrl = traderProfileUrl(trade.platform, trade.wallet);
+
   await emitAlert(
     {
       type: 'whale_trade',
-      severity: severityFor(score),
+      severity: bigUpside ? 'critical' : severityFor(score),
       platform: trade.platform,
-      title: `${classifyTier(score)} Detected`,
+      title: bigUpside ? '💎 High-Conviction Whale Detected' : `${classifyTier(score)} Detected`,
       body: formatWhaleAlert({
         platform: trade.platform,
         market: market?.title ?? trade.marketExternalId,
         trader: trade.trader ?? null,
         wallet: trade.wallet ?? null,
+        profileUrl,
         side: trade.side,
         outcome: trade.outcomeName ?? null,
         entryPrice: trade.price,
@@ -104,6 +117,7 @@ export async function detectWhale(trade: NormalizedTrade, persisted: PersistedTr
         tradeExternalId: trade.externalId,
         wallet: trade.wallet,
         trader: trade.trader,
+        profileUrl,
         side: trade.side,
         outcome: trade.outcomeName,
         entryPrice: trade.price,
@@ -112,6 +126,8 @@ export async function detectWhale(trade: NormalizedTrade, persisted: PersistedTr
         sizeUsd: trade.sizeUsd,
         volumeUsd,
         payoutIfWin,
+        profitPct,
+        bigUpside,
         sellPnl,
         score,
         tier,
@@ -148,6 +164,7 @@ function formatWhaleAlert(a: {
   market: string;
   trader: string | null;
   wallet: string | null;
+  profileUrl: string | null;
   side: string;
   outcome: string | null;
   entryPrice: number;
@@ -196,6 +213,7 @@ function formatWhaleAlert(a: {
     `Platform: ${a.platform}`,
     `Market: ${a.market}`,
     `Trader: ${trader}`,
+    a.profileUrl ? `Profile: ${a.profileUrl}` : null,
     `Action: ${action} @ ${pct(a.entryPrice)}`,
     `Size: ${usd(a.sizeUsd)}`,
     outcomeLine,
@@ -206,7 +224,9 @@ function formatWhaleAlert(a: {
     `Wallet ROI: ${roi}`,
     `Whale Score: ${a.score}`,
     `Market Impact: ${impact}`,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**

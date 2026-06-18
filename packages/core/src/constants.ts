@@ -16,6 +16,21 @@ export const PLATFORMS = [
 
 export type Platform = (typeof PLATFORMS)[number];
 
+/**
+ * Public profile URL for a trader on a venue, when one can be built from the
+ * stored wallet/user id. Polymarket uses the proxy wallet; other venues have no
+ * reliable wallet→URL mapping yet, so they return null (no link rendered).
+ */
+export function traderProfileUrl(platform: Platform | string, wallet?: string | null): string | null {
+  if (!wallet) return null;
+  switch (platform) {
+    case 'polymarket':
+      return `https://polymarket.com/profile/${wallet}`;
+    default:
+      return null;
+  }
+}
+
 /** Venues where we can attribute trades to a stable wallet/user id. */
 export const WALLET_NATIVE_PLATFORMS: Platform[] = ['polymarket', 'kalshi', 'manifold'];
 

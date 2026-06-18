@@ -58,6 +58,12 @@ const schema = z.object({
   // Ignore near-certainty BUYS (price ≥ this): paying ~99¢ to win $1 is risk-free
   // parking/yield, not conviction — not a meaningful whale. 1 = disable the skip.
   WHALE_MAX_PRICE: num(0.98),
+  // High-conviction tier: a BUY whose potential payout (cost / price) is ≥ this
+  // AND whose upside (payout/cost − 1) is ≥ WHALE_BIG_PROFIT_PCT is flagged
+  // CRITICAL, titled "High-Conviction Whale", and always pings Telegram (bypasses
+  // TELEGRAM_MIN_ALERT_USD). A big asymmetric bet — large upside bought cheap.
+  WHALE_BIG_PAYOUT_USD: num(1_000_000),
+  WHALE_BIG_PROFIT_PCT: num(0.5),
   SPLIT_WINDOW_MS: num(15 * 60_000),
   SPLIT_THRESHOLD_USD: num(300_000),
   STEAM_MOVE_PCT: num(0.1),

@@ -42,8 +42,11 @@ export async function startAlertsSubscriber(bot: Telegraf): Promise<void> {
     // (rich dashboard), but Telegram only pings for trades/accumulations ≥
     // TELEGRAM_MIN_ALERT_USD. Non-size alerts (steam/arb/volume/wallet) use their
     // own detection thresholds and are unaffected.
+    // High-conviction whales (big payout + high upside) ALWAYS ping, bypassing
+    // the size gate — they're the headline signal.
+    const bigUpside = (alert.data as Record<string, unknown> | undefined)?.bigUpside === true;
     const usd = alertUsd(alert);
-    if (usd != null && usd < config.TELEGRAM_MIN_ALERT_USD) return;
+    if (!bigUpside && usd != null && usd < config.TELEGRAM_MIN_ALERT_USD) return;
 
     const text = render(alert);
 
