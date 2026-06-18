@@ -1,4 +1,4 @@
-import { config, logger, redis, type NormalizedTrade } from '@whale/core';
+import { config, logger, redis, traderLabel, traderProfileUrl, type NormalizedTrade } from '@whale/core';
 import { prisma } from '@whale/db';
 import { emitAlert } from '../alerts.js';
 import type { PersistedTrade } from '../persist.js';
@@ -47,6 +47,7 @@ export async function detectSplitAccumulation(
   });
   const usd = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
   const dir = trade.side === 'sell' ? '🔴 SELL' : '🟢 BUY';
+  const profileUrl = traderProfileUrl(trade.platform, trade.wallet);
   // Per-leg breakdown, largest first: "$120k + $100k + $100k" (cap at 8 shown).
   const legsDesc = [...sizes].sort((a, b) => b - a);
   const shown = legsDesc.slice(0, 8).map(usd).join(' + ');
@@ -61,14 +62,19 @@ export async function detectSplitAccumulation(
       body: [
         `Platform: ${trade.platform}`,
         `Market: ${market?.title ?? trade.marketExternalId}`,
-        `Wallet: ${trade.wallet}`,
+        `Trader: ${traderLabel(trade.trader, trade.wallet)}`,
+        profileUrl ? `Profile: ${profileUrl}` : null,
         `Action: ${dir} ${trade.outcomeName ?? ''}`.trim(),
         `Accumulated ${usd(aggregate)} across ${members.length} legs`,
         `Breakdown: ${breakdown}`,
         `Window: ${Math.round(config.SPLIT_WINDOW_MS / 60000)} min`,
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
       data: {
         wallet: trade.wallet,
+        trader: trade.trader,
+        profileUrl,
         legs: members.length,
         aggregateUsd: aggregate,
         sizes: legsDesc,

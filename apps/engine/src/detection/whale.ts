@@ -3,6 +3,7 @@ import {
   computeWhaleScore,
   config,
   quant,
+  traderLabel,
   traderProfileUrl,
   type AlertSeverity,
   type NormalizedTrade,
@@ -188,11 +189,8 @@ function formatWhaleAlert(a: {
   const isBuy = a.side.toLowerCase() !== 'sell';
   const action = `${isBuy ? '🟢 BUY' : '🔴 SELL'} ${a.outcome ?? ''}`.trim();
 
-  // Trader display name (Polymarket exposes one), with the short wallet for
-  // verification; fall back to the short wallet alone when there's no name.
-  const shortWallet =
-    a.wallet && a.wallet.length > 10 ? `${a.wallet.slice(0, 5)}…${a.wallet.slice(-5)}` : a.wallet;
-  const trader = a.trader ? (shortWallet ? `${a.trader} (${shortWallet})` : a.trader) : (shortWallet ?? 'unknown');
+  // Trader display name (Polymarket exposes one) + short wallet for verification.
+  const trader = traderLabel(a.trader, a.wallet);
 
   // BUY → payout if it wins (+profit · multiple); SELL → estimated realized PnL.
   let outcomeLine: string;

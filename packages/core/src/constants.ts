@@ -31,6 +31,19 @@ export function traderProfileUrl(platform: Platform | string, wallet?: string | 
   }
 }
 
+/** Wallet/address shortened to first 5 + last 5 chars (e.g. 0x4ed…e1635). */
+export function shortWallet(wallet?: string | null): string | null {
+  if (!wallet) return null;
+  return wallet.length > 10 ? `${wallet.slice(0, 5)}…${wallet.slice(-5)}` : wallet;
+}
+
+/** Display label for a trader: "name (0x4ed…e1635)", or the short wallet alone
+ *  when there's no name, or "unknown" when neither is available. */
+export function traderLabel(trader?: string | null, wallet?: string | null): string {
+  const sw = shortWallet(wallet);
+  return trader ? (sw ? `${trader} (${sw})` : trader) : (sw ?? 'unknown');
+}
+
 /** Venues where we can attribute trades to a stable wallet/user id. */
 export const WALLET_NATIVE_PLATFORMS: Platform[] = ['polymarket', 'kalshi', 'manifold'];
 
