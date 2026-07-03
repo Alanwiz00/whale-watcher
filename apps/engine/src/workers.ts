@@ -10,6 +10,7 @@ import {
 } from '@whale/core';
 import { scanArbitrage } from './arbitrage.js';
 import { withDbRetry } from './db-retry.js';
+import { scanElonMarkets } from './detection/market-open.js';
 import { detectSplitAccumulation } from './detection/split.js';
 import { detectSteam } from './detection/steam.js';
 import { detectWhale } from './detection/whale.js';
@@ -115,6 +116,8 @@ export function startWorkers(): Worker[] {
           return;
         case 'ranks':
           return withDbRetry(() => recomputeRanks());
+        case 'market-open':
+          return scanElonMarkets();
       }
     },
     // Global scans (arbitrage / anomaly / leaderboard ranks) sweep every market &

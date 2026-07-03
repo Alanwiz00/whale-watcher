@@ -86,6 +86,10 @@ const schema = z.object({
   // Accepts one or more comma-separated chat ids for the default alert broadcast.
   TELEGRAM_ALERT_CHAT_ID: csv,
   TELEGRAM_ADMIN_CHAT_IDS: csv,
+  // Gated delivery for `market_open` (new Elon-tweets window) alerts: they go
+  // ONLY to these comma-separated chat ids — never the general broadcast or /live
+  // subscribers. Empty = market_open isn't delivered to Telegram at all.
+  TELEGRAM_MARKET_OPEN_CHAT_ID: csv,
   // Bot-only size gate (USD): Telegram pings only for whale/split alerts ≥ this,
   // independent of the lower WHALE_THRESHOLD_USD the engine detects at. 0 = off.
   TELEGRAM_MIN_ALERT_USD: num(0),
@@ -104,6 +108,15 @@ const schema = z.object({
   // holds regardless of COLLECTOR_CONCURRENCY, so a big poll pass doesn't trip
   // data-api 429s. 150ms ≈ 6.6 req/s. Raise if you still see 429; 0 disables.
   POLYMARKET_MIN_REQUEST_MS: num(150),
+  // "Market open" watcher: alert the moment a new Elon-tweets COUNT window is
+  // listed (daily/2-day/weekly), independent of liquidity. Polls these Gamma
+  // tag(s). 101659 = elon-tweets. Empty ELON_TAG_IDS or ELON_TRACKING=false = off.
+  ELON_TRACKING: bool(true),
+  POLYMARKET_ELON_TAG_IDS: z
+    .string()
+    .default('101659')
+    .transform((s) => s.split(',').map((x) => x.trim()).filter(Boolean)),
+  ELON_SCAN_INTERVAL_MS: num(60_000),
   KALSHI_API_BASE: z.string().default('https://api.elections.kalshi.com/trade-api/v2'),
   KALSHI_API_KEY_ID: z.string().optional().default(''),
   KALSHI_PRIVATE_KEY_PATH: z.string().optional().default(''),

@@ -26,6 +26,14 @@ export async function registerScans(): Promise<void> {
   await scanQueue.add('arbitrage', {}, { repeat: { every: 60_000 }, jobId: 'arbitrage' });
   await scanQueue.add('anomaly', {}, { repeat: { every: 300_000 }, jobId: 'anomaly' });
   await scanQueue.add('ranks', {}, { repeat: { every: 300_000 }, jobId: 'ranks' });
+  // "Market open" watcher — fires the instant a new Elon-tweets window is listed.
+  if (config.ELON_TRACKING) {
+    await scanQueue.add(
+      'market-open',
+      {},
+      { repeat: { every: config.ELON_SCAN_INTERVAL_MS }, jobId: 'market-open' },
+    );
+  }
 }
 
 export async function closeQueues(): Promise<void> {

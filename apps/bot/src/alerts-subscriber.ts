@@ -19,6 +19,7 @@ const EMOJI: Record<string, string> = {
   arbitrage: '⚖️',
   volume_anomaly: '📊',
   wallet_anomaly: '🕵️',
+  market_open: '🆕',
 };
 
 /**
@@ -51,16 +52,22 @@ export async function startAlertsSubscriber(bot: Telegraf): Promise<void> {
     const text = render(alert);
 
     const targets = new Set<string>();
-    // Default broadcast chats get medium+ severity (low = e.g. small "Normal"
-    // whales, which would be too chatty). /live chats get everything.
-    // Steam moves are lower-confidence/noisier, so they're firehose-only: never
-    // broadcast — delivered solely to chats that opted in via /live.
-    const liveOnly = LIVE_ONLY_TYPES.has(alert.type);
-    if (!liveOnly && alert.severity !== 'low') {
-      for (const id of config.TELEGRAM_ALERT_CHAT_ID) targets.add(id);
+    if (alert.type === 'market_open') {
+      // Gated delivery: market-open (new Elon window) goes ONLY to the selected
+      // chats — never the general broadcast or /live subscribers.
+      for (const id of config.TELEGRAM_MARKET_OPEN_CHAT_ID) targets.add(id);
+    } else {
+      // Default broadcast chats get medium+ severity (low = e.g. small "Normal"
+      // whales, which would be too chatty). /live chats get everything.
+      // Steam moves are lower-confidence/noisier, so they're firehose-only: never
+      // broadcast — delivered solely to chats that opted in via /live.
+      const liveOnly = LIVE_ONLY_TYPES.has(alert.type);
+      if (!liveOnly && alert.severity !== 'low') {
+        for (const id of config.TELEGRAM_ALERT_CHAT_ID) targets.add(id);
+      }
+      const subs = await redis().smembers(SUBS_KEY);
+      for (const s of subs) targets.add(s);
     }
-    const subs = await redis().smembers(SUBS_KEY);
-    for (const s of subs) targets.add(s);
 
     for (const chatId of targets) {
       if (!(await allow())) break;

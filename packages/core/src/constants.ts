@@ -186,6 +186,9 @@ export const ALERT_TYPES = [
   'arbitrage',
   'volume_anomaly',
   'wallet_anomaly',
+  // A newly-opened market we watch for (e.g. a fresh Elon-tweets window) — fired
+  // the moment it's listed, independent of liquidity.
+  'market_open',
 ] as const;
 
 export type AlertType = (typeof ALERT_TYPES)[number];

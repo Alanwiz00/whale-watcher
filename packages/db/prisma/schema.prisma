@@ -65,6 +65,7 @@ enum AlertType {
   arbitrage
   volume_anomaly
   wallet_anomaly
+  market_open
 }
 
 enum AlertSeverity {
