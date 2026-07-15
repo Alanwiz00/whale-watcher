@@ -110,13 +110,17 @@ const schema = z.object({
   POLYMARKET_MIN_REQUEST_MS: num(150),
   // "Market open" watcher: alert the moment a new Elon-tweets COUNT window is
   // listed (daily/2-day/weekly), independent of liquidity. Polls these Gamma
-  // tag(s). 101659 = elon-tweets. Empty ELON_TAG_IDS or ELON_TRACKING=false = off.
+  // tag(s). 972 = tweets-markets (where "Elon Musk # tweets …" live); 101659 =
+  // elon-tweets. Empty ELON_TAG_IDS or ELON_TRACKING=false disables it.
   ELON_TRACKING: bool(true),
   POLYMARKET_ELON_TAG_IDS: z
     .string()
-    .default('101659')
+    .default('972,101659')
     .transform((s) => s.split(',').map((x) => x.trim()).filter(Boolean)),
   ELON_SCAN_INTERVAL_MS: num(60_000),
+  // Only alert on windows LISTED within this age (ms) — avoids back-filling old
+  // still-open markets on first run; "new" means recently created. Default 7d.
+  ELON_MAX_AGE_MS: num(7 * 24 * 3_600_000),
   KALSHI_API_BASE: z.string().default('https://api.elections.kalshi.com/trade-api/v2'),
   KALSHI_API_KEY_ID: z.string().optional().default(''),
   KALSHI_PRIVATE_KEY_PATH: z.string().optional().default(''),
